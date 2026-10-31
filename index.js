@@ -14,7 +14,7 @@ import { analyzeHistoryBatch, analyzeMessage, discoverHistoryCharacters } from '
 import { detectConflicts } from './src/integration/conflicts.js';
 import { clearRelationshipPrompt, updateRelationshipPrompt } from './src/integration/prompt.js';
 import { getSettings } from './src/integration/settings.js';
-import { createHistoryBatches, rebuildWithoutAutomaticHistory, historyFingerprint } from './src/integration/history.js';
+import { createHistoryBatches, rebuildWithoutAutomaticHistory, historyFingerprint, sampleHistory } from './src/integration/history.js';
 import { applyAnalysisResult } from './src/integration/analysis-operations.js';
 import { loadLinkedLore, analyzeLorebookCharacters, canonKeys, namesMatch } from './src/integration/lorebooks.js';
 import { generateGrowthFactors, directionPresets } from './src/integration/growth.js';
@@ -222,20 +222,34 @@ export async function init() {
     notify();
   }
 
-  function sampleHistory(messages, maxCharacters) {
-    const available = messages.filter(message => message?.mes?.trim());
-    let total = 0;
-    const selected = [];
-    const step = Math.max(1, Math.floor(available.length / 80));
-    for (let index = 0; index < available.length; index += step) {
-      const message = available[index];
-      if (total + message.mes.length > maxCharacters && selected.length) break;
-      selected.push(message);
-      total += message.mes.length;
+  /** Character card(s) of the current chat (or every group member) plus the user persona. */
+  function cardContext(ctx, maxCharacters = 9000) {
+    const substitute = value => {
+      const text = String(value ?? '').trim();
+      if (!text) return '';
+      try { return typeof ctx.substituteParams === 'function' ? ctx.substituteParams(text) : text; }
+      catch { return text; }
+    };
+    let cards = [];
+    if (ctx.groupId) {
+      const group = (ctx.groups ?? []).find(item => String(item.id) === String(ctx.groupId));
+      cards = (group?.members ?? []).map(avatar => (ctx.characters ?? []).find(character => character?.avatar === avatar)).filter(Boolean);
+    } else if (ctx.characterId !== undefined && ctx.characterId !== null) {
+      const card = ctx.characters?.[ctx.characterId];
+      if (card) cards = [card];
     }
-    const last = available.at(-1);
-    if (last && !selected.includes(last) && total + last.mes.length <= maxCharacters) selected.push(last);
-    return selected;
+    const parts = [];
+    const perCard = cards.length ? Math.floor((maxCharacters - 1200) / cards.length) : 0;
+    for (const card of cards) {
+      const fields = [card.description ?? card.data?.description, card.personality ?? card.data?.personality, card.scenario ?? card.data?.scenario, card.first_mes ?? card.data?.first_mes]
+        .map(substitute).filter(Boolean).join('\n');
+      if (!fields) continue;
+      parts.push(`### Карточка «${card.name}»\n${fields.length > perCard ? `${fields.slice(0, perCard)}…` : fields}`);
+    }
+    const personaName = String(ctx.name1 ?? '').trim();
+    const personaDescription = substitute(ctx.powerUserSettings?.persona_description).slice(0, 1000);
+    if (personaName) parts.push(`### Персона пользователя «${personaName}»\n${personaDescription || '(без описания)'}`);
+    return parts.join('\n\n');
   }
 
   /** Find characters inside linked lorebooks, deduplicate against the registry, ask, add. */
@@ -331,7 +345,7 @@ export async function init() {
     if (!batches.length) throw new Error('В чате нет сюжетных сообщений.');
     onProgress('Ищу персонажей в истории…');
     const knownEntities = Object.values(state.entities).map(entity => ({ id: entity.id, name: entity.name, aliases: entity.aliases ?? [] }));
-    const { characters: discovered, knownAliases } = await discoverHistoryCharacters(ctx, sampleHistory(messages, settings.analysisMaxCharacters * 2), settings, knownEntities);
+    const { characters: discovered, knownAliases } = await discoverHistoryCharacters(ctx, sampleHistory(messages, settings.analysisMaxCharacters * 2), settings, knownEntities, cardContext(ctx));
     assertCurrent();
     // Registry-aware dedup: never re-add persons the model or transliteration already knows.
     const registryKeys = new Set();

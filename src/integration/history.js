@@ -51,3 +51,29 @@ export function historyFingerprint(messages) {
   for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619);
   return (hash >>> 0).toString(36);
 }
+
+/**
+ * Evenly sample the WHOLE chat for character discovery. The old version
+ * stopped as soon as the budget filled, so long roleplay posts meant only the
+ * first few messages were ever seen and characters introduced later were
+ * missed. Now every sampled message gets an equal share of the budget
+ * (beginning + ending of the post), spread from the first to the last message.
+ */
+export function sampleHistory(messages, maxCharacters) {
+  const available = messages.filter(message => message?.mes?.trim());
+  if (!available.length) return [];
+  const minExcerpt = 500;
+  const count = Math.min(available.length, 60, Math.max(1, Math.floor(maxCharacters / minExcerpt)));
+  const indices = new Set();
+  for (let index = 0; index < count; index += 1) {
+    indices.add(count === 1 ? available.length - 1 : Math.round(index * (available.length - 1) / (count - 1)));
+  }
+  const picked = [...indices].sort((left, right) => left - right).map(index => available[index]);
+  const excerpt = Math.max(200, Math.floor(maxCharacters / picked.length) - 60);
+  return picked.map(message => {
+    const text = message.mes.trim();
+    if (text.length <= excerpt) return message;
+    const half = Math.floor(excerpt / 2);
+    return { ...message, mes: `${text.slice(0, half)} … ${text.slice(-half)}` };
+  });
+}
