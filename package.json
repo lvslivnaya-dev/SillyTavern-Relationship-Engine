@@ -1,0 +1,16 @@
+{
+  "name": "sillytavern-relationship-engine",
+  "version": "0.2.0",
+  "private": false,
+  "type": "module",
+  "description": "Directed relationship continuity engine for narrator-driven SillyTavern chats.",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check index.js && node --test",
+    "pack:zip": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack.ps1"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
