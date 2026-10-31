@@ -28,6 +28,8 @@ export function createRelationshipStudio(options = {}) {
   let recordFilter = {};
   let factorsPairId = null;
   let selectedForRemoval = new Set();
+  let toolsOpen = false; // phone only: persona/pair block is collapsible
+  const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
 
   const style = element('style', { text: STYLE + `
     .relationship-card{min-width:0;overflow:hidden}.relationship-card .grid{display:flex;flex-direction:column;gap:14px}.relationship-card .card{min-width:0;width:100%;position:static;grid-area:auto}.relationship-card .metric{grid-template-columns:minmax(80px,110px) minmax(0,1fr) 42px}.relationship-card input[type=range]{min-width:0;width:100%}.item p{overflow-wrap:anywhere}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}.chips .active{border-color:var(--rs-accent)}.triangle-edges{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px}.header{flex-wrap:wrap}
@@ -54,7 +56,50 @@ export function createRelationshipStudio(options = {}) {
     .busy-pill[hidden]{display:none}
     .busy-pill .dot{width:12px;height:12px;border-radius:50%;border:2px solid color-mix(in srgb,var(--rs-accent) 40%,transparent);border-top-color:var(--rs-accent);animation:rs-spin .8s linear infinite;flex:0 0 auto}
     .mobile-tools{display:none}
-    @media(max-width:760px){.mobile-tools{display:flex}}
+    .sidebar-tools>summary{display:none}
+    @media(max-width:760px){
+      .mobile-tools{display:flex}
+      /* One scroll container for the whole studio: nothing scrolls sideways,
+         the tab strip stays pinned, the content gets the full screen. */
+      .studio{display:flex;flex-direction:column;height:100dvh;max-height:100dvh;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+      .header{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 12px;min-height:0}
+      .header .brand{order:0;flex:1 1 calc(100% - 56px);min-width:0;margin:0}
+      .header .brand strong{font-size:18px}
+      .header>.icon{order:1;width:40px;min-height:40px;flex:0 0 auto}
+      .header>.busy-pill{order:2;flex:1 1 100%}
+      .header>.btn.primary{order:3;flex:1 1 140px;min-height:40px;padding:6px 8px;font-size:13px;white-space:normal;line-height:1.2}
+      .header>.mobile-tools{order:4;flex:1 1 100%;margin:0;justify-content:flex-start}
+      .header>.status{order:5;flex:1 1 100%;margin:0;min-height:0}
+      .header>.status:empty{display:none}
+      .sidebar{display:contents}
+      .nav{position:sticky;top:0;z-index:5;display:flex;flex-wrap:nowrap;gap:6px;margin:0;padding:8px 12px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;background:var(--rs-bg);border-bottom:1px solid var(--rs-line);flex:0 0 auto}
+      .nav::-webkit-scrollbar{display:none}
+      .nav button{flex:0 0 auto;min-height:40px;padding:6px 12px;font-size:14px}
+      .sidebar-tools{flex:0 0 auto;margin:10px 12px 0;padding:0 12px;border:1px solid var(--rs-line);border-radius:10px;background:var(--rs-panel)}
+      .sidebar-tools>summary{display:block;cursor:pointer;padding:11px 0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;list-style:none}
+      .sidebar-tools>summary::-webkit-details-marker{display:none}
+      .sidebar-tools>summary::before{content:'▸';display:inline-block;margin-right:6px;transition:transform .15s}
+      .sidebar-tools[open]>summary::before{transform:rotate(90deg)}
+      .sidebar-tools[open]{padding-bottom:10px}
+      .sidebar-tools .field{min-width:0}
+      .content{flex:0 0 auto;overflow:visible;padding:12px;min-width:0}
+      .hero{margin-bottom:12px}
+      .hero h2{font-size:22px}
+      .card{padding:12px;border-radius:11px}
+      .relationship-cards{gap:12px!important}
+      .relationship-card .card{padding:0;border:0;background:none}
+      .relationship-card .card h3{font-size:13px;color:var(--rs-muted);margin:0 0 4px}
+      .metric,.relationship-card .metric{grid-template-columns:minmax(84px,104px) minmax(0,1fr) 40px;gap:8px;margin:8px 0;font-size:14px}
+      .metric label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .grid{grid-template-columns:minmax(0,1fr)}
+      .field{min-width:0}
+      .toolbar{margin-bottom:0}
+      .chips{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}
+      .chips .btn{flex:0 0 auto;min-height:34px;font-size:12px;padding:4px 10px}
+      .item-head{flex-wrap:wrap}
+      /* vertical swipes over sliders scroll the page instead of yanking values */
+      input[type=range]{touch-action:pan-y}
+    }
   ` });
   const backdrop = element('div', { className: 'backdrop', hidden: true });
   backdrop.setAttribute('role', 'dialog');
@@ -285,12 +330,19 @@ export function createRelationshipStudio(options = {}) {
     const pairForm = element('div', { className: 'field', style: { borderTop: '1px solid var(--rs-line, #303a49)', marginTop: '12px', paddingTop: '12px' } });
     const pair = getPair(snapshot, selectedPairId);
     pairForm.append(element('p', { className: 'section-title', style: { margin: '0 0 4px' }, text: 'Редактируемая пара' }), pairToolbar(pair));
-    return element('aside', { className: 'sidebar' }, [
-      nav,
+    // On phones this block collapses so the selected tab is visible right away
+    // instead of being pushed below half a screen of form controls.
+    const tools = element('details', { className: 'sidebar-tools' });
+    tools.open = !isPhone() || toolsOpen;
+    const summaryText = pair ? `Персона и пара: ${pairLabel(snapshot, pair)}` : 'Персона и редактируемая пара';
+    tools.append(
+      element('summary', { text: summaryText }),
       personaForm,
       pairForm,
       element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Персона выбирается из вкладки «Персоны» SillyTavern: её исходящие чувства не отслеживаются, входящие к ней — отслеживаются.' }),
-    ]);
+    );
+    tools.addEventListener('toggle', () => { if (isPhone()) toolsOpen = tools.open; });
+    return element('aside', { className: 'sidebar' }, [nav, tools]);
   }
 
   function renderCharacterManager() {
@@ -718,6 +770,12 @@ export function createRelationshipStudio(options = {}) {
 
   document.addEventListener('keydown', onKeyDown);
   cleanups.push(() => document.removeEventListener('keydown', onKeyDown));
+  // Re-render when crossing the phone breakpoint (rotation, split screen), so
+  // the collapsible persona/pair block is never left closed on a wide layout.
+  const phoneQuery = typeof window.matchMedia === 'function' ? window.matchMedia('(max-width: 760px)') : null;
+  const onLayoutChange = () => { if (isOpen) render(); };
+  phoneQuery?.addEventListener?.('change', onLayoutChange);
+  cleanups.push(() => phoneQuery?.removeEventListener?.('change', onLayoutChange));
   backdrop.addEventListener('pointerdown', (event) => { if (event.target === backdrop && options.closeOnBackdrop !== false) close(); });
   cleanups.push(facade.subscribe((value) => { snapshot = value; if (isOpen) render(); }));
   render();

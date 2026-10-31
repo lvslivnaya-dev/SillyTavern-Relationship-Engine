@@ -36,8 +36,12 @@ export function createRelationshipWidget(options = {}) {
   let snapshot = normalizeSnapshot(options.initialState || facade.read());
   let selectedPairId = options.activePairId || snapshot.activePairId || pairId(snapshot.activePair);
   let expanded = options.expanded ?? Boolean(snapshot.widget?.expanded);
+  // `position` is where the user put the widget; it is only clamped for display.
+  // Keeping it unclamped means a temporary viewport shrink (mobile keyboard,
+  // address bar) no longer pushes the widget up permanently.
   let position = normalizePosition(options.position || snapshot.widget?.position || { x: 16, y: 16 });
   let drag = null;
+  const DRAG_THRESHOLD = 6;
 
   const widget = element('aside', { className: 'widget', role: 'complementary', 'aria-label': options.label || 'Активные отношения' });
   shadow.append(element('style', { text: STYLE + LIST_STYLE }), widget);
@@ -51,17 +55,31 @@ export function createRelationshipWidget(options = {}) {
     dispatch(host, `relationship-widget:${name}`, detail);
   }
 
-  function applyPosition(next = position) {
+  function viewportSize() {
+    const viewport = window.visualViewport;
+    return {
+      width: Math.round(viewport?.width || window.innerWidth || document.documentElement.clientWidth),
+      height: Math.round(Math.max(window.innerHeight || 0, viewport?.height || 0) || document.documentElement.clientHeight),
+    };
+  }
+
+  function clampToViewport(next) {
     const rect = widget.getBoundingClientRect();
     const margin = 6;
     const width = rect.width || (expanded ? 330 : 46);
-    const height = rect.height || (expanded ? 48 : 46);
-    position = {
-      x: clamp(next.x, margin, Math.max(margin, window.innerWidth - width - margin)),
-      y: clamp(next.y, margin, Math.max(margin, window.innerHeight - height - margin)),
+    const height = expanded ? 48 : (rect.height || 46); // keep the title bar reachable
+    const viewport = viewportSize();
+    return {
+      x: clamp(next.x, margin, Math.max(margin, viewport.width - width - margin)),
+      y: clamp(next.y, margin, Math.max(margin, viewport.height - height - margin)),
     };
-    widget.style.left = `${position.x}px`;
-    widget.style.top = `${position.y}px`;
+  }
+
+  function applyPosition(next = position, store = true) {
+    const shown = clampToViewport(next);
+    if (store) position = shown;
+    widget.style.left = `${shown.x}px`;
+    widget.style.top = `${shown.y}px`;
     widget.style.right = 'auto';
     widget.style.bottom = 'auto';
   }
@@ -82,10 +100,9 @@ export function createRelationshipWidget(options = {}) {
       widget.append(element('span', { className: 'busy-dot', title: 'Модель думает', role: 'status' }));
     }
     widget.append(fabIcon);
-    const openFab = () => { setExpanded(true); };
-    fabIcon.addEventListener('click', openFab);
-    fabIcon.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openFab(); } });
-    widget.addEventListener('pointerdown', beginDrag);
+    // Tap vs. drag is decided in endDrag (movement threshold), so the whole
+    // square is draggable and a plain tap still opens the list.
+    fabIcon.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setExpanded(true); } });
   }
 
   function renderFull() {
@@ -103,7 +120,6 @@ export function createRelationshipWidget(options = {}) {
     const toggleButton = button('−', 'icon', () => setExpanded(false), 'Свернуть виджет в квадратик');
     toggleButton.setAttribute('aria-expanded', 'false');
     bar.append(identity, toggleButton);
-    bar.addEventListener('pointerdown', beginDrag);
     if (snapshot.modelBusy) {
       const busy = element('span', { className: 'busy-dot', title: `Модель думает: ${snapshot.modelBusyLabel || 'запрос к модели…'}`, role: 'status' });
       identity.append(busy);
@@ -149,14 +165,14 @@ export function createRelationshipWidget(options = {}) {
   }
 
   function render() {
-    const listeners = [...widget.querySelectorAll('*')];
     widget.replaceChildren();
     widget.classList.remove('fab');
     widget.style.width = '';
     widget.style.position = 'fixed';
     if (expanded) renderFull();
     else renderFab();
-    requestAnimationFrame(() => applyPosition(position));
+    applyPosition(position, false);
+    requestAnimationFrame(() => applyPosition(position, false));
   }
 
   function renderLastChange(pair) {
@@ -171,55 +187,79 @@ export function createRelationshipWidget(options = {}) {
     ]);
   }
 
+  // One set of pointer listeners on the stable <aside>. The old code attached a
+  // new listener on every collapsed render (they piled up) and ignored presses
+  // on the heart icon — which covers the whole square — so the collapsed
+  // widget could never be dragged.
   function beginDrag(event) {
-    if (event.button !== 0 || event.target.closest('button, .fab-icon')) return;
+    if (drag || (event.pointerType === 'mouse' && event.button !== 0)) return;
+    const onFab = widget.classList.contains('fab');
+    if (!onFab) {
+      if (!event.target.closest('.bar') || event.target.closest('button')) return;
+    }
     const rect = widget.getBoundingClientRect();
-    drag = { pointerId: event.pointerId, dx: event.clientX - rect.left, dy: event.clientY - rect.top, moved: false };
-    // setPointerCapture throws (and kills the drag) when the pointer is already
-    // gone — e.g. a tap whose pointerup raced ahead. Pointer capture is an
-    // optimization, not a requirement, so its failure must never break dragging.
-    try { event.currentTarget.setPointerCapture(event.pointerId); }
-    catch (error) { console.info('[Relationship Engine] Pointer capture unavailable, dragging without it.'); }
-    event.currentTarget.classList.add('dragging');
-    event.currentTarget.addEventListener('pointermove', moveDrag);
-    event.currentTarget.addEventListener('pointerup', endDrag);
-    event.currentTarget.addEventListener('pointercancel', endDrag);
+    drag = {
+      pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
+      dx: event.clientX - rect.left, dy: event.clientY - rect.top, moved: false, onFab,
+    };
+    try { widget.setPointerCapture(event.pointerId); }
+    catch { /* capture is an optimization; dragging works without it */ }
     event.preventDefault();
   }
 
   function moveDrag(event) {
     if (!drag || event.pointerId !== drag.pointerId) return;
-    drag.moved = true;
+    if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < DRAG_THRESHOLD) return;
+    if (!drag.moved) { drag.moved = true; widget.classList.add('dragging'); }
+    event.preventDefault();
     applyPosition({ x: event.clientX - drag.dx, y: event.clientY - drag.dy });
   }
 
   function endDrag(event) {
     if (!drag || event.pointerId !== drag.pointerId) return;
-    const target = event.currentTarget;
-    target.classList.remove('dragging');
-    target.removeEventListener('pointermove', moveDrag);
-    target.removeEventListener('pointerup', endDrag);
-    target.removeEventListener('pointercancel', endDrag);
-    const moved = drag.moved;
+    const { moved, onFab } = drag;
     drag = null;
+    widget.classList.remove('dragging');
+    try { widget.releasePointerCapture(event.pointerId); } catch { /* already released */ }
     if (moved) {
+      const payload = { position: { ...position } };
+      facade.invoke('onPositionChange', payload);
+      emit('position-change', payload);
+    } else if (onFab && event.type === 'pointerup') {
+      setExpanded(true);
+    }
+  }
+
+  widget.addEventListener('pointerdown', beginDrag);
+  widget.addEventListener('pointermove', moveDrag);
+  widget.addEventListener('pointerup', endDrag);
+  widget.addEventListener('pointercancel', endDrag);
+  // Stop the page behind from scrolling while a finger drags the widget.
+  widget.addEventListener('touchmove', event => { if (drag) event.preventDefault(); }, { passive: false });
+
+  function setExpanded(value) {
+    if (expanded === value) return;
+    // Keep the right edge where it was, so the square appears where the panel's
+    // corner was (and vice versa) instead of jumping to the middle of a phone screen.
+    const before = widget.getBoundingClientRect();
+    expanded = value;
+    facade.invoke('onWidgetToggle', { expanded });
+    emit('toggle', { expanded });
+    render();
+    const after = widget.getBoundingClientRect();
+    if (before.width && after.width) {
+      applyPosition({ x: before.right - after.width, y: before.top });
       const payload = { position: { ...position } };
       facade.invoke('onPositionChange', payload);
       emit('position-change', payload);
     }
   }
 
-  function setExpanded(value) {
-    if (expanded === value) return;
-    expanded = value;
-    facade.invoke('onWidgetToggle', { expanded });
-    emit('toggle', { expanded });
-    render();
-  }
-
-  function onResize() { applyPosition(position); }
+  function onResize() { applyPosition(position, false); }
   window.addEventListener('resize', onResize, { passive: true });
   cleanups.push(() => window.removeEventListener('resize', onResize));
+  window.visualViewport?.addEventListener('resize', onResize, { passive: true });
+  cleanups.push(() => window.visualViewport?.removeEventListener('resize', onResize));
   cleanups.push(facade.subscribe((value) => { snapshot = value; render(); }));
   render();
 
@@ -231,7 +271,8 @@ export function createRelationshipWidget(options = {}) {
     update(value) { snapshot = normalizeSnapshot(value || facade.read()); facade.setLocal(snapshot); render(); },
     selectPair(value) { selectedPairId = typeof value === 'string' ? value : pairId(value); render(); },
     setPosition(value, persist = false) {
-      applyPosition(normalizePosition(value));
+      position = normalizePosition(value);
+      applyPosition(position);
       if (persist) {
         const payload = { position: { ...position } };
         facade.invoke('onPositionChange', payload); emit('position-change', payload);

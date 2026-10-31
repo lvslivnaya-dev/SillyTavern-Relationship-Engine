@@ -180,23 +180,24 @@ export async function loadLinkedLore(context, state, maxCharacters = 14000) {
 export function extractBookText(book, maxCharacters = 16000) {
   const entries = Object.values(book?.entries ?? {})
     .filter(entry => !entry.disable && typeof entry.content === 'string' && entry.content.trim());
-  const totalLength = entries.reduce((sum, entry) => sum + entry.content.trim().length, 0);
-  // If everything does not fit, keep the beginning of each entry proportionally
-  // instead of dropping later entries completely.
-  const budget = totalLength > maxCharacters ? Math.max(200, Math.floor(maxCharacters / entries.length)) : Infinity;
-  const parts = [];
-  let size = 0;
-  for (const entry of entries) {
-    const title = entry.comment || (Array.isArray(entry.key) ? entry.key.join(', ') : '') || 'Запись';
+  // Every entry keeps its title AND trigger keys (keys usually are the
+  // character's names), so no entry silently disappears in a big book; only the
+  // content is shortened proportionally when everything does not fit.
+  const headers = entries.map(entry => {
+    const keys = Array.isArray(entry.key) ? entry.key.filter(Boolean).join(', ') : '';
+    const title = entry.comment || keys || 'Запись';
+    return `## ${title}${keys && keys !== title ? ` [ключи: ${keys}]` : ''}`;
+  });
+  const headerLength = headers.reduce((sum, header) => sum + header.length + 3, 0);
+  const totalLength = headerLength + entries.reduce((sum, entry) => sum + entry.content.trim().length, 0);
+  const budget = totalLength > maxCharacters
+    ? Math.max(60, Math.floor((maxCharacters - headerLength) / Math.max(1, entries.length)))
+    : Infinity;
+  return entries.map((entry, index) => {
     let content = entry.content.trim();
     if (content.length > budget) content = `${content.slice(0, budget)}…`;
-    const part = `## ${title}\n${content}`;
-    if (size + part.length > maxCharacters && parts.length) break;
-    parts.push(part);
-    size += part.length;
-    if (size >= maxCharacters) break;
-  }
-  return parts.join('\n\n');
+    return `${headers[index]}\n${content}`;
+  }).join('\n\n');
 }
 
 /**

@@ -45,11 +45,15 @@ export async function analyzeMessage(context, state, message, settings, loreCont
  * (Zoro in the registry vs Зоро in the chat) and returns them as knownAliases
  * instead of duplicates. Returns { characters, knownAliases }.
  */
-export async function discoverHistoryCharacters(context, messages, settings, knownEntities = []) {
+export async function discoverHistoryCharacters(context, messages, settings, knownEntities = [], cardText = '') {
   const transcript = formatTranscript(messages, settings.analysisMaxCharacters * 2);
-  if (!transcript.trim()) return { characters: [], knownAliases: [] };
+  if (!transcript.trim() && !cardText.trim()) return { characters: [], knownAliases: [] };
   const knownList = knownEntities.map(entity => `${entity.id} = ${entity.name}${(entity.aliases ?? []).length ? ` (${entity.aliases.join(', ')})` : ''}`).join('\n');
-  const prompt = `Find recurring story characters in this roleplay history. The active assistant may be a Narrator/Game Master and must not be returned as a character. Include the user's in-story persona when identifiable.
+  const cardBlock = cardText.trim() ? `CHARACTER CARD(S) AND USER PERSONA (background for this chat):
+${cardText}
+
+` : '';
+  const prompt = `Find ALL recurring story characters in this roleplay: everyone with a name who acts, speaks, or is a main/secondary protagonist — check the character card(s) AND the whole history excerpt (it is sampled from the beginning to the end of the chat). A card may belong to a Narrator/Game Master (then the card name itself is not a character, but the persons it describes are) or to a real story character (then include that character). Never return the Narrator/Game Master. Include the user's in-story persona when identifiable. Do not miss a second or third protagonist just because another one dominates the text.
 
 KNOWN REGISTRY (already registered characters):
 ${knownList || '(empty)'}
@@ -59,9 +63,10 @@ Rules:
 - "characters" must contain only persons absent from the registry.
 - Do not include generic roles, unnamed crowds, the Narrator, or the Game Master.
 
-Return JSON only: {"characters":[{"name":"canonical name","aliases":["alias"]}],"knownAliases":[{"id":"registry ID","aliases":["spellings from this chat")}]}.
+Return JSON only: {"characters":[{"name":"canonical name","aliases":["alias"]}],"knownAliases":[{"id":"registry ID","aliases":["spellings from this chat"]}]}.
 
-${transcript}`;
+${cardBlock}CHAT HISTORY (sampled excerpts, "…" marks skipped text):
+${transcript || '(empty)'}`;
   try {
     const raw = await requestStructured(context, {
       prompt: [
