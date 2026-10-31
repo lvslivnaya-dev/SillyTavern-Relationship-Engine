@@ -63,11 +63,13 @@ export function createRelationshipWidget(options = {}) {
     };
   }
 
-  function clampToViewport(next) {
+  function clampToViewport(next, fitWhole = false) {
     const rect = widget.getBoundingClientRect();
     const margin = 6;
     const width = rect.width || (expanded ? 330 : 46);
-    const height = expanded ? 48 : (rect.height || 46); // keep the title bar reachable
+    // While dragging, only the title bar has to stay reachable; right after
+    // expanding, the whole panel should fit (opening from a bottom corner).
+    const height = expanded && !fitWhole ? 48 : (rect.height || 46);
     const viewport = viewportSize();
     return {
       x: clamp(next.x, margin, Math.max(margin, viewport.width - width - margin)),
@@ -75,8 +77,8 @@ export function createRelationshipWidget(options = {}) {
     };
   }
 
-  function applyPosition(next = position, store = true) {
-    const shown = clampToViewport(next);
+  function applyPosition(next = position, store = true, fitWhole = false) {
+    const shown = clampToViewport(next, fitWhole);
     if (store) position = shown;
     widget.style.left = `${shown.x}px`;
     widget.style.top = `${shown.y}px`;
@@ -226,8 +228,20 @@ export function createRelationshipWidget(options = {}) {
       facade.invoke('onPositionChange', payload);
       emit('position-change', payload);
     } else if (onFab && event.type === 'pointerup') {
+      // The browser fires a `click` right after this pointerup. Once the panel
+      // has expanded, whatever sits under the finger receives it — in a right
+      // corner that is the "−" collapse button, so the panel closed instantly.
+      // Swallow that one trailing click.
+      swallowNextClick();
       setExpanded(true);
     }
+  }
+
+  function swallowNextClick() {
+    const swallow = clickEvent => { clickEvent.stopPropagation(); clickEvent.preventDefault(); cleanup(); };
+    const cleanup = () => { window.removeEventListener('click', swallow, true); clearTimeout(timer); };
+    const timer = setTimeout(cleanup, 600);
+    window.addEventListener('click', swallow, true);
   }
 
   widget.addEventListener('pointerdown', beginDrag);
@@ -248,7 +262,7 @@ export function createRelationshipWidget(options = {}) {
     render();
     const after = widget.getBoundingClientRect();
     if (before.width && after.width) {
-      applyPosition({ x: before.right - after.width, y: before.top });
+      applyPosition({ x: before.right - after.width, y: before.top }, true, value);
       const payload = { position: { ...position } };
       facade.invoke('onPositionChange', payload);
       emit('position-change', payload);
