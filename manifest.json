@@ -4,7 +4,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Anna & Hugh",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "homePage": "https://github.com/lvslivnaya-dev/SillyTavern-Relationship-Engine",
   "minimum_client_version": "1.19.0",
   "auto_update": true,

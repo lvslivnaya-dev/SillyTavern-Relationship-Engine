@@ -1,6 +1,6 @@
 {
   "name": "sillytavern-relationship-engine",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": false,
   "type": "module",
   "description": "Directed relationship continuity engine for narrator-driven SillyTavern chats.",
