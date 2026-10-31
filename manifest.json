@@ -1,0 +1,13 @@
+{
+  "display_name": "Движок отношений",
+  "loading_order": 11,
+  "js": "index.js",
+  "css": "style.css",
+  "author": "Anna & Hugh",
+  "version": "0.1.0",
+  "minimum_client_version": "1.19.0",
+  "auto_update": false,
+  "hooks": {
+    "activate": "init"
+  }
+}
