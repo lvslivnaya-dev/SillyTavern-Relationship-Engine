@@ -62,6 +62,7 @@ Rules:
 - If a character from the chat is the SAME person as someone in the registry — including translated names (Theodore=Фёдор), alternate spellings (Зоро=Zoro), or full names (Юлиан Вега=Julian) — do NOT list them as new. Instead return them in "knownAliases" with the registry ID and the spellings used in the chat.
 - "characters" must contain only persons absent from the registry.
 - Do not include generic roles, unnamed crowds, the Narrator, or the Game Master.
+- Speaker labels in the history are SillyTavern display names: assistant messages carry the card name (e.g. "A и B: title"), which may be a narrator card, not a person. Two heroes named in one card title are two separate characters.
 
 Return JSON only: {"characters":[{"name":"canonical name","aliases":["alias"]}],"knownAliases":[{"id":"registry ID","aliases":["spellings from this chat"]}]}.
 

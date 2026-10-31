@@ -69,7 +69,7 @@ export async function init() {
       personaBoundName: boundPersonaName,
       personaMismatch: Boolean(persona && chatPersona && boundPersonaName
         && boundPersonaName.toLocaleLowerCase('ru-RU') !== chatPersona.toLocaleLowerCase('ru-RU')),
-      lorebooks: { available: SillyTavern.getContext().getWorldInfoNames?.() ?? [], selected: state.ui?.linkedLorebooks ?? [], status: 'Книги подключаются только к анализатору этого чата. Исходные файлы не изменяются.' },
+      lorebooks: { available: SillyTavern.getContext().getWorldInfoNames?.() ?? [], selected: state.ui?.linkedLorebooks ?? [], cardWorlds: cardWorldNames(), status: 'Книги подключаются только к анализатору этого чата. Исходные файлы не изменяются.' },
       settings: { autoTrack: settings.autoAnalyze, widgetEnabled: settings.widget.visible },
       widget: {
         expanded: settings.widget.expanded,
@@ -220,6 +220,20 @@ export async function init() {
     widget.element.hidden = !settings.widget.visible;
     refreshPrompt();
     notify();
+  }
+
+  /** Lorebooks bound to the current card(s) in SillyTavern (card's "world"). */
+  function cardWorldNames() {
+    const ctx = SillyTavern.getContext();
+    let cards = [];
+    if (ctx.groupId) {
+      const group = (ctx.groups ?? []).find(item => String(item.id) === String(ctx.groupId));
+      cards = (group?.members ?? []).map(avatar => (ctx.characters ?? []).find(character => character?.avatar === avatar)).filter(Boolean);
+    } else if (ctx.characterId !== undefined && ctx.characterId !== null && ctx.characters?.[ctx.characterId]) {
+      cards = [ctx.characters[ctx.characterId]];
+    }
+    const available = new Set(ctx.getWorldInfoNames?.() ?? []);
+    return [...new Set(cards.map(card => card?.data?.extensions?.world).filter(name => name && available.has(name)))];
   }
 
   /** Character card(s) of the current chat (or every group member) plus the user persona. */

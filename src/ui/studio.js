@@ -57,6 +57,23 @@ export function createRelationshipStudio(options = {}) {
     .busy-pill .dot{width:12px;height:12px;border-radius:50%;border:2px solid color-mix(in srgb,var(--rs-accent) 40%,transparent);border-top-color:var(--rs-accent);animation:rs-spin .8s linear infinite;flex:0 0 auto}
     .mobile-tools{display:none}
     .sidebar-tools>summary{display:none}
+    .factors-layer{position:fixed;left:0;right:0;top:0;height:100%;z-index:2147483001;display:grid;place-items:center;padding:16px;background:rgba(0,0,0,.5)}
+    .factors-layer[hidden]{display:none}
+    .factors-sheet{width:min(680px,100%);max-height:min(88vh,100%);display:flex;flex-direction:column;background:var(--rs-bg);color:var(--rs-text);border:1px solid var(--rs-line);border-radius:12px;box-shadow:0 20px 60px #000a;overflow:hidden;font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .factors-head{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--rs-line);flex:0 0 auto}
+    .factors-head h3{flex:1;min-width:0;margin:0;font-size:15px;overflow-wrap:anywhere}
+    .factors-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:12px 14px;-webkit-overflow-scrolling:touch}
+    .factors-foot{display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--rs-line);flex:0 0 auto}
+    .factors-foot .btn{flex:1}
+    .factor-row{display:grid;gap:6px;margin:0 0 12px;padding-bottom:12px;border-bottom:1px dashed var(--rs-line)}
+    .factor-controls{display:flex;gap:6px;align-items:center}
+    .factor-controls select{flex:1 1 0;min-width:0}
+    .factor-controls .icon{flex:0 0 40px;width:40px;min-height:40px}
+    .factor-row textarea{width:100%;min-height:44px;resize:vertical;overflow-wrap:anywhere;white-space:pre-wrap;line-height:1.35}
+    .factors-generate{border-top:1px solid var(--rs-line);margin:14px 0 0;padding-top:12px}
+    .factors-generate-row{display:flex;gap:6px;flex-wrap:wrap}
+    .factors-generate-row select,.factors-generate-row input{flex:1 1 180px;min-width:0}
+    .factors-status{min-height:0;font-size:12px}
     @media(max-width:760px){
       .mobile-tools{display:flex}
       /* One scroll container for the whole studio: nothing scrolls sideways,
@@ -97,6 +114,9 @@ export function createRelationshipStudio(options = {}) {
       .chips{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}
       .chips .btn{flex:0 0 auto;min-height:34px;font-size:12px;padding:4px 10px}
       .item-head{flex-wrap:wrap}
+      .factors-layer{padding:0;place-items:stretch}
+      .factors-sheet{width:100%;height:100%;max-height:none;border-radius:0;border:0}
+      .factors-generate-row .btn{flex:1 1 100%}
       /* vertical swipes over sliders scroll the page instead of yanking values */
       input[type=range]{touch-action:pan-y}
     }
@@ -107,7 +127,9 @@ export function createRelationshipStudio(options = {}) {
   backdrop.setAttribute('aria-label', options.label || 'Студия отношений');
   const panel = element('section', { className: 'studio', tabIndex: -1 });
   backdrop.append(panel);
-  shadow.append(style, backdrop);
+  const factorsLayer = element('div', { className: 'factors-layer', hidden: true });
+  factorsLayer.addEventListener('click', event => { if (event.target === factorsLayer) closeFactors(); });
+  shadow.append(style, backdrop, factorsLayer);
   ensureContainer(options.container).append(host);
 
   function emit(name, detail) {
@@ -132,50 +154,85 @@ export function createRelationshipStudio(options = {}) {
   function render() {
     const pair = getPair(snapshot, selectedPairId);
     if (pair) selectedPairId = pairId(pair);
+    // Keep the reader where they were: re-rendering replaces the scroll
+    // containers' contents, which can snap them back to the top.
+    const scrollState = [panel, panel.querySelector('.content'), panel.querySelector('.sidebar'), panel.querySelector('.nav')]
+      .map(node => node ? { top: node.scrollTop, left: node.scrollLeft } : null);
     panel.replaceChildren(renderHeader(), renderSidebar(), renderContent(pair));
-    const factorsPair = factorsPairId ? getPair(snapshot, factorsPairId) : null;
-    const existing = shadow.querySelector('.factors-dialog');
-    if (factorsPair && !existing) {
-      const backdrop = element('div', { className: 'factors-dialog', style: {
-        position: 'fixed', inset: '0', zIndex: '60', display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.45)',
-      } });
-      backdrop.addEventListener('click', event => { if (event.target === backdrop) { factorsPairId = null; render(); } });
-      backdrop.append(renderFactorsDialog(factorsPair));
-      shadow.querySelector('.studio')?.append(backdrop);
-    } else if (!factorsPair && existing) existing.remove();
+    [panel, panel.querySelector('.content'), panel.querySelector('.sidebar'), panel.querySelector('.nav')].forEach((node, index) => {
+      const saved = scrollState[index];
+      if (node && saved) { node.scrollTop = saved.top; node.scrollLeft = saved.left; }
+    });
+    // The factors dialog lives in its own layer and is NOT rebuilt here:
+    // rebuilding it on every state update threw away what the user typed.
+    if (factorsPairId && !(snapshot.pairs || []).some(item => pairId(item) === factorsPairId)) closeFactors();
+  }
+
+  function openFactors(id) {
+    const pair = getPair(snapshot, id);
+    if (!pair) return;
+    factorsPairId = pairId(pair);
+    const sheet = renderFactorsDialog(pair);
+    factorsLayer.replaceChildren(sheet);
+    factorsLayer.hidden = false;
+    fitFactorsToViewport();
+    requestAnimationFrame(() => sheet.querySelector('.factors-close')?.focus({ preventScroll: true }));
+  }
+
+  function closeFactors() {
+    factorsPairId = null;
+    factorsLayer.hidden = true;
+    factorsLayer.replaceChildren();
+    factorsLayer.style.top = '';
+    factorsLayer.style.height = '';
+  }
+
+  // On phones the on-screen keyboard shrinks only the *visual* viewport; pin the
+  // sheet to it so the header (×) and the Save/Close buttons stay on screen.
+  function fitFactorsToViewport() {
+    if (factorsLayer.hidden) return;
+    const viewport = window.visualViewport;
+    if (isPhone() && viewport) {
+      factorsLayer.style.top = `${Math.round(viewport.offsetTop)}px`;
+      factorsLayer.style.height = `${Math.round(viewport.height)}px`;
+    } else {
+      factorsLayer.style.top = '';
+      factorsLayer.style.height = '';
+    }
   }
 
   function renderFactorsDialog(pair) {
-    const dialog = element('div', { role: 'dialog', 'aria-label': 'Факторы роста', style: {
-      width: 'min(680px, 94vw)', maxHeight: '88vh', overflow: 'auto', background: 'var(--rs-bg, #141923)',
-      border: '1px solid var(--rs-line, #333c4a)', borderRadius: '12px', padding: '18px',
-    } });
-    const factors = [...(pair.factors ?? [])];
-    dialog.append(element('h3', { text: `Факторы роста: ${pairLabel(snapshot, pair)}` }));
-    dialog.append(element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Что приближает или отдаляет эту связь. Факторы передаются анализатору: сцена, совпавшая с фактором, даёт изменение соответствующей шкалы в выбранную сторону.' }));
+    const sheet = element('div', { className: 'factors-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Факторы роста' });
+    const factors = [...(pair.factors ?? [])].map(factor => ({ ...factor }));
+    const head = element('div', { className: 'factors-head' }, [
+      element('h3', { text: `Факторы роста: ${pairLabel(snapshot, pair)}` }),
+    ]);
+    const closeIcon = button('×', 'icon factors-close', closeFactors, 'Закрыть факторы роста');
+    head.append(closeIcon);
+    const body = element('div', { className: 'factors-body' });
+    const status = element('p', { className: 'muted factors-status', role: 'status' });
+    body.append(element('p', { className: 'muted', style: { fontSize: '11px', marginTop: '0' }, text: 'Что приближает или отдаляет эту связь. Факторы передаются анализатору: сцена, совпавшая с фактором, даёт изменение соответствующей шкалы в выбранную сторону.' }));
 
-    const list = element('div');
+    const list = element('div', { className: 'factor-list' });
     function renderRows() {
       list.replaceChildren();
       factors.forEach((factor, index) => {
         const scale = element('select', { 'aria-label': 'Шкала' });
         for (const definition of metricDefinitions(snapshot, pair)) scale.append(element('option', { value: definition.key, text: definition.label, selected: definition.key === factor.scaleId }));
+        scale.addEventListener('change', () => { factor.scaleId = scale.value; });
         const direction = element('select', { 'aria-label': 'Направление' });
         direction.append(element('option', { value: 'up', text: '+ рост', selected: factor.direction === 'up' }));
         direction.append(element('option', { value: 'down', text: '− падение', selected: factor.direction === 'down' }));
-        const text = element('textarea', { value: factor.text, 'aria-label': 'Условие', placeholder: 'Например: делится личными тайнами', rows: 2 });
-        text.style.cssText = 'flex:1;min-width:200px;width:100%;resize:vertical;overflow-wrap:anywhere;white-space:pre-wrap;font:inherit;line-height:1.35';
+        direction.addEventListener('change', () => { factor.direction = direction.value; });
+        const text = element('textarea', { value: factor.text ?? '', 'aria-label': 'Условие', placeholder: 'Например: делится личными тайнами', rows: 2 });
         const autoGrow = () => { text.style.height = 'auto'; text.style.height = `${Math.max(44, text.scrollHeight + 4)}px`; };
-        text.addEventListener('input', autoGrow);
+        text.addEventListener('input', () => { factor.text = text.value; autoGrow(); });
         requestAnimationFrame(autoGrow);
         const remove = button('×', 'btn icon', () => { factors.splice(index, 1); renderRows(); }, 'Удалить фактор');
-        const row = element('div', { style: { display: 'flex', gap: '6px', margin: '6px 0', alignItems: 'flex-start' } }, [
-          element('div', { style: { display: 'grid', gap: '6px', flex: '0 0 auto' } }, [scale, direction]),
-          element('div', { style: { flex: '1', minWidth: '0' } }, [text]),
-          remove,
-        ]);
-        remove.style.alignSelf = 'flex-start';
-        list.append(row);
+        list.append(element('div', { className: 'factor-row' }, [
+          element('div', { className: 'factor-controls' }, [scale, direction, remove]),
+          text,
+        ]));
       });
       if (!factors.length) list.append(element('p', { className: 'muted', text: 'Факторов пока нет.' }));
     }
@@ -184,6 +241,7 @@ export function createRelationshipStudio(options = {}) {
     const addRow = button('+ Добавить фактор', 'btn', () => {
       factors.push({ scaleId: metricDefinitions(snapshot, pair)[0]?.key ?? 'trust', direction: 'up', text: '' });
       renderRows();
+      list.querySelector('.factor-row:last-child textarea')?.focus();
     });
 
     const directionSelect = element('select', { 'aria-label': 'Направление развития' });
@@ -194,39 +252,48 @@ export function createRelationshipStudio(options = {}) {
     ];
     for (const preset of presets) directionSelect.append(element('option', { value: preset.id, text: preset.label }));
     const customDirection = element('input', { type: 'text', placeholder: 'Опишите желаемое направление развития', 'aria-label': 'Своё направление' });
+    const setSheetStatus = (message, danger = false) => { status.textContent = message || ''; status.classList.toggle('danger', danger); };
     const generate = button('Сгенерировать по персонажу', 'btn', async () => {
       generate.disabled = true;
-      setStatus('Генерирую факторы по лору и сценам…');
+      setSheetStatus('Генерирую факторы по лору и сценам…');
       try {
-        await act('onGenerateFactors', {
+        await facade.invoke('onGenerateFactors', {
           sourceId: pairSource(pair), targetId: pairTarget(pair),
           directionId: directionSelect.value, customDirection: customDirection.value, replace: true,
-        }, 'factors-generate');
+        });
+        emit('factors-generate', {});
         setStatus('Факторы сгенерированы');
-        factorsPairId = null;
-        render();
+        closeFactors();
+      } catch (error) {
+        setSheetStatus(error?.message || 'Не удалось сгенерировать факторы', true);
       } finally { generate.disabled = false; }
     });
     const save = button('Сохранить', 'btn primary', async () => {
-      await act('onSetFactors', {
-        sourceId: pairSource(pair), targetId: pairTarget(pair),
-        factors: factors.filter(factor => factor.text.trim()),
-      }, 'factors-save');
-      setStatus('Факторы сохранены');
-      factorsPairId = null;
-      render();
+      save.disabled = true;
+      try {
+        await facade.invoke('onSetFactors', {
+          sourceId: pairSource(pair), targetId: pairTarget(pair),
+          factors: factors.filter(factor => String(factor.text ?? '').trim()),
+        });
+        emit('factors-save', {});
+        setStatus('Факторы сохранены');
+        closeFactors();
+      } catch (error) {
+        setSheetStatus(error?.message || 'Не удалось сохранить факторы', true);
+      } finally { save.disabled = false; }
     });
-    const close = button('Закрыть', 'btn', () => { factorsPairId = null; render(); });
+    const close = button('Закрыть', 'btn', closeFactors);
 
-    dialog.append(
+    body.append(
       list, addRow,
-      element('div', { style: { borderTop: '1px solid var(--rs-line, #333c4a)', margin: '12px 0', paddingTop: '12px' } }, [
+      element('div', { className: 'factors-generate' }, [
         element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Автогенерация: учитывает лор подключённых книг и сцены с обоими персонажами. «Своё направление» — впишите текстом.' }),
-        element('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } }, [directionSelect, customDirection, generate]),
+        element('div', { className: 'factors-generate-row' }, [directionSelect, customDirection, generate]),
       ]),
-      element('div', { style: { display: 'flex', gap: '8px', marginTop: '14px' } }, [save, close]),
+      status,
     );
-    return dialog;
+    sheet.append(head, body, element('div', { className: 'factors-foot' }, [save, close]));
+    return sheet;
   }
 
   function renderHeader() {
@@ -480,7 +547,7 @@ export function createRelationshipStudio(options = {}) {
         element('h3', { text: pairLabel(snapshot, pair) }),
         renderOverview(pair),
         element('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--rs-line, #303a49)' } }, [
-          button('Факторы роста', 'btn', () => { factorsPairId = pairId(pair); render(); }),
+          button('Факторы роста', 'btn', () => openFactors(pairId(pair))),
           button(hiddenFromWidget ? 'Показать в виджете' : 'Скрыть из виджета', 'btn', () => act('onToggleWidgetPair', { relationshipId: pairId(pair) }, 'widget-pair-toggle')),
           button('Удалить линию', 'btn', () => act('onRemovePair', {
             sourceId: pairSource(pair), targetId: pairTarget(pair),
@@ -508,6 +575,13 @@ export function createRelationshipStudio(options = {}) {
       lorebookSearchButton,
     ]);
     card.append(element('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } }, [select]), actions);
+    const cardWorlds = (lorebooks.cardWorlds || []).filter(name => !(lorebooks.selected || []).includes(name));
+    for (const name of cardWorlds) {
+      card.append(element('div', { className: 'item', style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', margin: '8px 0' } }, [
+        element('span', { style: { flex: '1 1 200px' }, text: `Лорбук карточки: «${name}» — не подключён к анализатору.` }),
+        button('Подключить книгу карточки', 'btn primary', () => act('onLinkLorebook', { name })),
+      ]));
+    }
     for (const name of lorebooks.selected || []) {
       const row = element('div', { className: 'item', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', margin: '8px 0' } }, [
         element('strong', { text: name }),
@@ -749,6 +823,7 @@ export function createRelationshipStudio(options = {}) {
   function close() {
     if (!isOpen) return;
     isOpen = false;
+    closeFactors();
     backdrop.hidden = true;
     document.documentElement.classList.remove('relationship-studio-open');
     if (returnFocus?.isConnected) returnFocus.focus();
@@ -758,7 +833,7 @@ export function createRelationshipStudio(options = {}) {
 
   function onKeyDown(event) {
     if (!isOpen) return;
-    if (event.key === 'Escape') close();
+    if (event.key === 'Escape') { if (!factorsLayer.hidden) closeFactors(); else close(); }
     if (event.key === 'Tab') {
       const focusable = [...shadow.querySelectorAll('button,input,select,textarea,[tabindex]:not([tabindex="-1"])')].filter((node) => !node.disabled && !node.hidden);
       if (!focusable.length) return;
@@ -773,7 +848,13 @@ export function createRelationshipStudio(options = {}) {
   // Re-render when crossing the phone breakpoint (rotation, split screen), so
   // the collapsible persona/pair block is never left closed on a wide layout.
   const phoneQuery = typeof window.matchMedia === 'function' ? window.matchMedia('(max-width: 760px)') : null;
-  const onLayoutChange = () => { if (isOpen) render(); };
+  const onLayoutChange = () => { if (isOpen) render(); fitFactorsToViewport(); };
+  window.visualViewport?.addEventListener('resize', fitFactorsToViewport);
+  window.visualViewport?.addEventListener('scroll', fitFactorsToViewport);
+  cleanups.push(() => {
+    window.visualViewport?.removeEventListener('resize', fitFactorsToViewport);
+    window.visualViewport?.removeEventListener('scroll', fitFactorsToViewport);
+  });
   phoneQuery?.addEventListener?.('change', onLayoutChange);
   cleanups.push(() => phoneQuery?.removeEventListener?.('change', onLayoutChange));
   backdrop.addEventListener('pointerdown', (event) => { if (event.target === backdrop && options.closeOnBackdrop !== false) close(); });
