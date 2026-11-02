@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyAnalysisResult } from '../src/integration/analysis-operations.js';
+import { applyAnalysisResult, describeProposedChanges } from '../src/integration/analysis-operations.js';
 import { createDefaultState, createOperation, applyOperations, rollbackMessage, importState } from '../src/core/index.js';
 import { parseAnalysis } from '../src/integration/analyzer.js';
 
@@ -93,4 +93,18 @@ test('love and attraction feed each other with a capped coupled delta', () => {
   const weakRelation = Object.values(appliedWeak.state.relationships)[0];
   assert.equal(weakRelation.scales.attraction, 0, 'малые дельты не создают связанного изменения');
   assert.equal(appliedWeak.operations.length, 1);
+});
+
+test('large-change popup lists names, scale labels and puts large deltas first', () => {
+  const state = setup();
+  state.entities.b.aliases = ['Leon'];
+  const rows = describeProposedChanges(state, [
+    { subjectId: 'a', objectId: 'b', metric: 'trust', delta: 2, reason: 'Мелочь' },
+    { subjectId: 'Leon', objectId: 'c', metric: 'love', delta: -15, reason: 'Предательство' },
+  ], 12);
+  assert.deepEqual(rows.map(row => [row.from, row.to, row.scale, row.delta, row.large]), [
+    ['Леон', 'Мира', 'Любовь', -15, true],
+    ['Анна', 'Леон', 'Доверие', 2, false],
+  ]);
+  assert.equal(rows[0].reason, 'Предательство');
 });

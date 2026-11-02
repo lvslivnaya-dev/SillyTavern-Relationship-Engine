@@ -4,6 +4,29 @@ function normalizedName(value) {
   return String(value ?? '').trim().toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
 }
 
+/** Human-readable list of proposed scale changes for the confirmation popup.
+ * Operations may reference characters by registry ID or by scene name. */
+export function describeProposedChanges(state, operations, threshold) {
+  const nameOf = reference => {
+    if (state.entities?.[reference]) return state.entities[reference].name;
+    const found = Object.values(state.entities ?? {}).find(entity =>
+      [entity.name, ...(entity.aliases ?? [])].some(candidate => normalizedName(candidate) === normalizedName(reference)));
+    return found?.name ?? String(reference ?? '?');
+  };
+  const labelOf = metric => state.config?.scales?.find(scale => scale.id === metric)?.label ?? metric;
+  return (operations ?? []).map(operation => {
+    const delta = Number(operation.delta);
+    return {
+      from: nameOf(operation.subjectId),
+      to: nameOf(operation.objectId),
+      scale: labelOf(operation.metric),
+      delta,
+      reason: String(operation.reason ?? ''),
+      large: Math.abs(delta) >= threshold,
+    };
+  }).sort((left, right) => Number(right.large) - Number(left.large) || Math.abs(right.delta) - Math.abs(left.delta));
+}
+
 /** Materialize validated analysis into ordinary reversible core operations.
  * acceptedNewCharacters: entries from result.newCharacters that the user confirmed;
  * operations may reference them by scene name, which is mapped to the new stable ID. */

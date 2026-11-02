@@ -29,6 +29,8 @@ export function createRelationshipStudio(options = {}) {
   let factorsPairId = null;
   let selectedForRemoval = new Set();
   let toolsOpen = false; // phone only: persona/pair block is collapsible
+  // Overview sections; character-to-character lines start collapsed to keep the screen clean.
+  const folds = { characters: false, personaLines: true, characterLines: false, allLines: true };
   const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
 
   const style = element('style', { text: STYLE + `
@@ -55,6 +57,22 @@ export function createRelationshipStudio(options = {}) {
     .busy-pill{display:inline-flex;align-items:center;gap:8px;padding:5px 12px;border:1px solid var(--rs-accent);border-radius:999px;background:color-mix(in srgb,var(--rs-accent) 18%,var(--rs-panel));font-size:12px;font-weight:600;white-space:nowrap}
     .busy-pill[hidden]{display:none}
     .busy-pill .dot{width:12px;height:12px;border-radius:50%;border:2px solid color-mix(in srgb,var(--rs-accent) 40%,transparent);border-top-color:var(--rs-accent);animation:rs-spin .8s linear infinite;flex:0 0 auto}
+    .settings-toggle.active{border-color:var(--rs-accent);background:color-mix(in srgb,var(--rs-panel) 80%,var(--rs-accent))}
+    .fold{border:1px solid var(--rs-line);border-radius:13px;background:var(--rs-panel)}
+    .fold>summary{cursor:pointer;list-style:none;padding:14px 16px;font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px}
+    .fold>summary::-webkit-details-marker{display:none}
+    .fold>summary::before{content:'▸';display:inline-block;transition:transform .15s;color:var(--rs-muted)}
+    .fold[open]>summary::before{transform:rotate(90deg)}
+    .fold>summary .muted{font-weight:400}
+    .fold-body{padding:0 16px 16px}
+    .fold .fold-body>.card{border:0;padding:0;background:none}
+    .triangle-list{display:grid;gap:16px}
+    .triangle-form{display:grid;gap:10px}
+    .triangle-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+    .triangle-head h3{margin:0}
+    .relationship-card>details+details{margin-top:12px;padding-top:12px;border-top:1px solid var(--rs-line)}
+    .relationship-card>details>summary{cursor:pointer;font-weight:600;margin-bottom:6px}
+    .pair-swap{justify-self:start}
     .mobile-tools{display:none}
     .sidebar-tools>summary{display:none}
     .factors-layer{position:fixed;left:0;right:0;top:0;height:100%;z-index:2147483001;display:grid;place-items:center;padding:16px;background:rgba(0,0,0,.5)}
@@ -80,7 +98,7 @@ export function createRelationshipStudio(options = {}) {
          the tab strip stays pinned, the content gets the full screen. */
       .studio{display:flex;flex-direction:column;height:100dvh;max-height:100dvh;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
       .header{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 12px;min-height:0}
-      .header .brand{order:0;flex:1 1 calc(100% - 56px);min-width:0;margin:0}
+      .header .brand{order:0;flex:1 1 calc(100% - 104px);min-width:0;margin:0}
       .header .brand strong{font-size:18px}
       .header>.icon{order:1;width:40px;min-height:40px;flex:0 0 auto}
       .header>.busy-pill{order:2;flex:1 1 100%}
@@ -188,7 +206,7 @@ export function createRelationshipStudio(options = {}) {
   }
 
   // On phones the on-screen keyboard shrinks only the *visual* viewport; pin the
-  // sheet to it so the header (×) and the Save/Close buttons stay on screen.
+  // sheet to it so the title and the Save/Close buttons stay on screen.
   function fitFactorsToViewport() {
     if (factorsLayer.hidden) return;
     const viewport = window.visualViewport;
@@ -207,8 +225,6 @@ export function createRelationshipStudio(options = {}) {
     const head = element('div', { className: 'factors-head' }, [
       element('h3', { text: `Факторы роста: ${pairLabel(snapshot, pair)}` }),
     ]);
-    const closeIcon = button('×', 'icon factors-close', closeFactors, 'Закрыть факторы роста');
-    head.append(closeIcon);
     const body = element('div', { className: 'factors-body' });
     const status = element('p', { className: 'muted factors-status', role: 'status' });
     body.append(element('p', { className: 'muted', style: { fontSize: '11px', marginTop: '0' }, text: 'Что приближает или отдаляет эту связь. Факторы передаются анализатору: сцена, совпавшая с фактором, даёт изменение соответствующей шкалы в выбранную сторону.' }));
@@ -282,7 +298,7 @@ export function createRelationshipStudio(options = {}) {
         setSheetStatus(error?.message || 'Не удалось сохранить факторы', true);
       } finally { save.disabled = false; }
     });
-    const close = button('Закрыть', 'btn', closeFactors);
+    const close = button('Закрыть', 'btn factors-close', closeFactors);
 
     body.append(
       list, addRow,
@@ -301,22 +317,6 @@ export function createRelationshipStudio(options = {}) {
       element('strong', { text: options.title || 'Студия отношений' }),
       element('span', { text: options.subtitle || 'Чувства, воспоминания и противоречия персонажей' }),
     ]);
-    const importInput = element('input', { type: 'file', accept: 'application/json,.json', hidden: true });
-    importInput.addEventListener('change', async () => {
-      const file = importInput.files?.[0];
-      if (!file) return;
-      try {
-        if (file.size > 5_000_000) throw new Error('Файл импорта больше 5 МБ.');
-        const data = JSON.parse(await file.text());
-        await act('onImport', { data, file }, 'import');
-        setStatus('Импорт завершён');
-      } catch (error) {
-        setStatus(error?.message || 'Не удалось импортировать данные', true);
-      } finally {
-        importInput.value = '';
-      }
-    });
-    const importButton = button('Импорт', 'btn', () => importInput.click());
     const historyButton = button('Проанализировать историю', 'btn primary', async () => {
       historyButton.disabled = true;
       try {
@@ -333,13 +333,6 @@ export function createRelationshipStudio(options = {}) {
         setStatus('Анализ завершён');
       } catch (error) { setStatus(error?.message || 'Не удалось проанализировать ответ', true); }
     });
-    const exportButton = button('Экспорт', 'btn', async () => {
-      try {
-        const result = await act('onExport', { snapshot }, 'export');
-        if (result !== false) downloadJson(result ?? snapshot, options.exportFilename);
-        setStatus('Экспорт завершён');
-      } catch (error) { setStatus(error?.message || 'Не удалось экспортировать данные', true); }
-    });
     if (snapshot.modelBusy) {
       historyButton.disabled = true;
       analyzeButton.disabled = true;
@@ -351,14 +344,15 @@ export function createRelationshipStudio(options = {}) {
     } else {
       busyPill.hidden = true;
     }
-    // Compact secondary toolbar: on phones the non-primary header buttons are
-    // hidden by the mobile CSS, so import/export live here instead.
-    const mobileTools = element('div', { className: 'mobile-tools' }, [
-      importButton, exportButton,
-    ]);
+    const settingsButton = button('⚙', `icon settings-toggle${tab === 'settings' ? ' active' : ''}`, () => {
+      tab = tab === 'settings' ? 'overview' : 'settings';
+      render();
+    }, 'Настройки');
+    settingsButton.setAttribute('aria-pressed', String(tab === 'settings'));
     return element('header', { className: 'header' }, [
-      brand, busyPill, importInput, historyButton, analyzeButton, mobileTools,
+      brand, busyPill, historyButton, analyzeButton,
       element('span', { className: 'status', role: 'status', 'aria-live': 'polite' }),
+      settingsButton,
       button('×', 'icon', close, 'Закрыть Студию отношений'),
     ]);
   }
@@ -366,6 +360,7 @@ export function createRelationshipStudio(options = {}) {
   function renderSidebar() {
     const nav = element('nav', { className: 'nav', 'aria-label': 'Разделы Студии' });
     for (const [id, label] of TABS) {
+      if (id === 'settings') continue; // opened by the ⚙ button in the header
       const item = button(label, id === tab ? 'active' : '', () => { tab = id; render(); });
       item.setAttribute('aria-current', id === tab ? 'page' : 'false');
       nav.append(item);
@@ -413,7 +408,7 @@ export function createRelationshipStudio(options = {}) {
   }
 
   function renderCharacterManager() {
-    const box = element('div', { className: 'card' }, [element('h3', { text: 'Персонажи' })]);
+    const box = element('div', { className: 'card' });
     const list = element('div', { className: 'characters', style: { display: 'grid', gap: '6px' } });
     const personaId = snapshot.personaId || snapshot.ui?.personaId || '';
     const removableCharacters = (snapshot.characters || []).filter(character => characterId(character) !== personaId);
@@ -502,7 +497,19 @@ export function createRelationshipStudio(options = {}) {
     };
     sourceSelect.select.addEventListener('change', apply);
     targetSelect.select.addEventListener('change', apply);
-    return element('div', { className: 'toolbar', style: { display: 'grid', gap: '8px' } }, [sourceSelect.field, targetSelect.field]);
+    // Reverse direction: B → A is a separate line, created on demand like any selected pair.
+    const swap = button('⇅ Поменять местами', 'btn pair-swap', () => {
+      const from = sourceSelect.select.value;
+      const to = targetSelect.select.value;
+      if (!from || !to) return;
+      sourceSelect.select.value = to;
+      targetSelect.select.value = from;
+      apply();
+    }, 'Поменять местами: кто испытывает и к кому');
+    const targetIsPersona = Boolean(personaId && currentPair && pairTarget(currentPair) === personaId);
+    if (!currentPair || targetIsPersona) swap.disabled = true;
+    if (targetIsPersona) swap.title = 'Исходящие чувства персоны не отслеживаются';
+    return element('div', { className: 'toolbar', style: { display: 'grid', gap: '8px' } }, [sourceSelect.field, targetSelect.field, swap]);
   }
 
   function characterSelect(label, value, characters) {
@@ -537,11 +544,44 @@ export function createRelationshipStudio(options = {}) {
     return content;
   }
 
+  function fold(key, title, note, body) {
+    const details = element('details', { className: 'fold' });
+    details.open = folds[key];
+    details.addEventListener('toggle', () => { folds[key] = details.open; });
+    const summary = element('summary', { text: title });
+    if (note) summary.append(element('span', { className: 'muted', text: note }));
+    details.append(summary, element('div', { className: 'fold-body' }, [body]));
+    return details;
+  }
+
   function renderAllRelationships() {
     const container = element('div', { style: { display: 'grid', gap: '16px' } });
-    container.append(renderCharacterManager());
+    const characterCount = (snapshot.characters || []).length;
+    container.append(fold('characters', 'Персонажи', `· ${characterCount}`, renderCharacterManager()));
+    const pairs = snapshot.pairs || [];
+    if (!pairs.length) {
+      container.append(element('p', { className: 'empty', text: 'Пока нет связей: выберите пару в левой панели или запустите анализ истории.' }));
+      return container;
+    }
+    const personaId = snapshot.personaId || snapshot.ui?.personaId || '';
+    if (!personaId) {
+      container.append(fold('allLines', 'Линии отношений', `· ${pairs.length}`, renderPairCards(pairs)));
+      return container;
+    }
+    const withPersona = pairs.filter(pair => pairTarget(pair) === personaId);
+    const between = pairs.filter(pair => pairTarget(pair) !== personaId);
+    container.append(
+      fold('personaLines', 'Линии с персоной', `· ${withPersona.length}`, withPersona.length
+        ? renderPairCards(withPersona) : element('p', { className: 'empty', text: 'Пока никто не испытывает чувств к персоне.' })),
+      fold('characterLines', 'Линии между персонажами', `· ${between.length}`, between.length
+        ? renderPairCards(between) : element('p', { className: 'empty', text: 'Линий между персонажами пока нет.' })),
+    );
+    return container;
+  }
+
+  function renderPairCards(pairs) {
     const grid = element('div', { className: 'relationship-cards', style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,350px),1fr))', gap: '16px' } });
-    for (const pair of snapshot.pairs || []) {
+    for (const pair of pairs) {
       const hiddenFromWidget = (snapshot.ui?.hiddenRelationshipIds ?? []).includes(pairId(pair));
       const card = element('article', { className: 'card relationship-card' }, [
         element('h3', { text: pairLabel(snapshot, pair) }),
@@ -556,9 +596,7 @@ export function createRelationshipStudio(options = {}) {
       ]);
       grid.append(card);
     }
-    if (!snapshot.pairs?.length) grid.append(element('p', { className: 'empty', text: 'Пока нет связей: выберите пару в левой панели или запустите анализ истории.' }));
-    container.append(grid);
-    return container;
+    return grid;
   }
 
   function renderLorebooks() {
@@ -715,15 +753,15 @@ export function createRelationshipStudio(options = {}) {
   }
 
   function renderTriangles() {
-    const container = element('div');
-    const form = element('form', { className: 'card' });
+    const container = element('div', { className: 'triangle-list' });
+    const form = element('form', { className: 'card triangle-form' });
     const name = element('input', { placeholder: 'Название треугольника', 'aria-label': 'Название треугольника' });
     const center = characterSelect('Центр (персонаж 2)', '', snapshot.characters);
     const first = characterSelect('Персонаж 1', '', snapshot.characters);
     const second = characterSelect('Персонаж 3', '', snapshot.characters);
     const submit = button('Создать треугольник', 'btn primary', () => {}); submit.type = 'submit';
-    submit.style.cssText = 'margin-top:12px';
-    form.append(name, center.field, first.field, second.field, submit);
+    submit.style.cssText = 'justify-self:start;margin-top:4px';
+    form.append(element('h3', { text: 'Новый треугольник', style: { margin: '0' } }), name, center.field, first.field, second.field, submit);
     form.addEventListener('submit', event => {
       event.preventDefault();
       try {
@@ -733,7 +771,12 @@ export function createRelationshipStudio(options = {}) {
     });
     container.append(form);
     for (const triangle of snapshot.ui?.triangles || []) {
-      const group = element('section', { className: 'card triangle-group' }, [element('h3', { text: triangle.name }), button('Удалить группу', 'btn', () => act('onRemoveTriangle', { id: triangle.id }))]);
+      const group = element('section', { className: 'card triangle-group' }, [
+        element('div', { className: 'triangle-head' }, [
+          element('h3', { text: triangle.name }),
+          button('Удалить группу', 'btn', () => act('onRemoveTriangle', { id: triangle.id })),
+        ]),
+      ]);
       const edges = element('div', { className: 'triangle-edges' });
       for (const [a, b] of triangleEdges(triangle.centerId, triangle.firstId, triangle.secondId)) {
         const label = `${characterName(snapshot.characters.find(c => characterId(c) === a), a)} ↔ ${characterName(snapshot.characters.find(c => characterId(c) === b), b)}`;
@@ -805,8 +848,42 @@ export function createRelationshipStudio(options = {}) {
     });
     preview.append(previewText);
     const wrapper = element('div');
-    wrapper.append(form, preview);
+    wrapper.append(form, renderDataTransfer(), preview);
     return wrapper;
+  }
+
+  function renderDataTransfer() {
+    const card = element('div', { className: 'card settings', style: { marginTop: '14px' } }, [
+      element('h3', { text: 'Перенос данных' }),
+      element('p', { className: 'muted', style: { fontSize: '11px', marginTop: '0' }, text: 'Экспорт сохраняет персонажей, линии, воспоминания, напряжения и треугольники текущего чата в JSON-файл. Импорт заменяет ими состояние открытого чата.' }),
+    ]);
+    const importInput = element('input', { type: 'file', accept: 'application/json,.json', hidden: true });
+    importInput.addEventListener('change', async () => {
+      const file = importInput.files?.[0];
+      if (!file) return;
+      try {
+        if (file.size > 5_000_000) throw new Error('Файл импорта больше 5 МБ.');
+        const data = JSON.parse(await file.text());
+        const imported = await act('onImport', { data, file }, 'import');
+        if (imported !== false) setStatus('Импорт завершён');
+      } catch (error) {
+        setStatus(error?.message || 'Не удалось импортировать данные', true);
+      } finally {
+        importInput.value = '';
+      }
+    });
+    const exportButton = button('Экспорт в файл', 'btn', async () => {
+      try {
+        const result = await act('onExport', { snapshot }, 'export');
+        if (result !== false) downloadJson(result ?? snapshot, options.exportFilename);
+        setStatus('Экспорт завершён');
+      } catch (error) { setStatus(error?.message || 'Не удалось экспортировать данные', true); }
+    });
+    card.append(importInput, element('div', { className: 'row' }, [
+      exportButton,
+      button('Импорт из файла', 'btn', () => importInput.click()),
+    ]));
+    return card;
   }
 
   function open() {

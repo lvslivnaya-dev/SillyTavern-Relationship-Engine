@@ -15,7 +15,7 @@ import { detectConflicts } from './src/integration/conflicts.js';
 import { clearRelationshipPrompt, updateRelationshipPrompt } from './src/integration/prompt.js';
 import { getSettings } from './src/integration/settings.js';
 import { createHistoryBatches, rebuildWithoutAutomaticHistory, historyFingerprint, sampleHistory } from './src/integration/history.js';
-import { applyAnalysisResult } from './src/integration/analysis-operations.js';
+import { applyAnalysisResult, describeProposedChanges } from './src/integration/analysis-operations.js';
 import { loadLinkedLore, analyzeLorebookCharacters, canonKeys, namesMatch } from './src/integration/lorebooks.js';
 import { generateGrowthFactors, directionPresets } from './src/integration/growth.js';
 import { getAnalysisTokenUsage } from './src/integration/analyzer.js';
@@ -28,6 +28,11 @@ import { createRelationshipWidget } from './src/ui/widget.js';
 
 const MESSAGE_EXTRA_KEY = 'relationshipEngineV1';
 let controller = null;
+
+/** SillyTavern popups render their text as HTML. */
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+}
 
 export async function init() {
   if (controller) return controller;
@@ -206,7 +211,15 @@ export async function init() {
   }
 
   async function importFromStudio({ data }) {
-    await commit(importState(data?.state ?? data), true);
+    const imported = importState(data?.state ?? data);
+    const ctx = SillyTavern.getContext();
+    const accepted = await ctx.Popup.show.confirm(
+      'Импорт отношений',
+      `<p>В файле персонажей: ${Object.keys(imported.entities ?? {}).length}, линий: ${Object.keys(imported.relationships ?? {}).length}.</p><p>Текущие отношения этого чата будут заменены. Продолжить?</p>`,
+    );
+    if (accepted !== ctx.POPUP_RESULT.AFFIRMATIVE) return false;
+    await commit(imported, true);
+    return true;
   }
 
   function exportForStudio() {
@@ -743,9 +756,14 @@ export async function init() {
 
   async function confirmLargeChanges(operations) {
     if (!settings.confirmLargeChanges || !operations.some(item => Math.abs(Number(item.delta)) >= settings.largeChangeThreshold)) return true;
+    const rows = describeProposedChanges(state, operations, settings.largeChangeThreshold).map(change => {
+      const sign = change.delta > 0 ? '+' : '';
+      const line = `${escapeHtml(change.from)} → ${escapeHtml(change.to)}: ${escapeHtml(change.scale)} ${sign}${change.delta}`;
+      return `<li style="margin:4px 0">${change.large ? `<b>${line}</b>` : line}${change.reason ? `<br><small>${escapeHtml(change.reason)}</small>` : ''}</li>`;
+    }).join('');
     const result = await context.Popup.show.confirm(
-      'Движок отношений',
-      'Анализатор предложил крупное изменение отношений. Применить его?',
+      'Скачок в отношениях',
+      `<p>Анализатор предлагает крупное изменение (порог ${settings.largeChangeThreshold}). Крупные выделены:</p><ul style="text-align:left;margin:0;padding-left:18px">${rows}</ul><p>Применить весь анализ этого ответа?</p>`,
     );
     return result === context.POPUP_RESULT.AFFIRMATIVE;
   }
@@ -753,11 +771,12 @@ export async function init() {
   /** Ask the user about unregistered scene participants. Returns [] / accepted list, or null if analysis was cancelled. */
   async function confirmNewCharacters(characters, ctx) {
     if (!characters?.length) return [];
+    // Popup text is HTML: names and notes come from the model and must be escaped.
     const lines = characters.map(character =>
-      `• ${character.name}${character.aliases.length ? ` (${character.aliases.join(', ')})` : ''}${character.note ? ` — ${character.note}` : ''}`).join('\n');
+      `<li>${escapeHtml(character.name)}${character.aliases.length ? ` (${escapeHtml(character.aliases.join(', '))})` : ''}${character.note ? ` — ${escapeHtml(character.note)}` : ''}</li>`).join('');
     const accepted = await ctx.Popup.show.confirm(
       'Новые персонажи в сцене',
-      `В этом ответе участвуют незарегистрированные персонажи:\n\n${lines}\n\nДобавить их и линии отношений с ними? Ответ «Нет» сохранит анализ только по известным персонажам.`,
+      `<p>В этом ответе участвуют незарегистрированные персонажи:</p><ul style="text-align:left;margin:0;padding-left:18px">${lines}</ul><p>Добавить их и линии отношений с ними? Ответ «Нет» сохранит анализ только по известным персонажам.</p>`,
     );
     if (accepted !== ctx.POPUP_RESULT.AFFIRMATIVE) return [];
     return characters;
