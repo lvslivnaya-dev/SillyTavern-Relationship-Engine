@@ -16,6 +16,18 @@ export const DEFAULT_SETTINGS = Object.freeze({
   sendFactors: true,
   maxPromptCharacters: 4000,
   analysisMaxCharacters: 12000,
+  // Auxiliary model for the extension's own requests (see llm.js). The key of the
+  // 'custom' mode is stored here, in SillyTavern's extension settings.
+  aux: {
+    mode: 'off',
+    profileId: '',
+    url: '',
+    key: '',
+    model: '',
+    maxTokens: 4096,
+    fallbackToMain: false,
+    purposes: { analysis: true, discovery: true, generation: true },
+  },
   widget: {
     visible: true,
     expanded: false,

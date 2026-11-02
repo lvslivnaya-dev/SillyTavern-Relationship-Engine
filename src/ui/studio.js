@@ -1326,8 +1326,99 @@ export function createRelationshipStudio(options = {}) {
     });
     preview.append(previewText);
     const wrapper = element('div');
-    wrapper.append(form, renderDataTransfer(), preview, renderDiagnostics());
+    wrapper.append(form, renderAuxApi(), renderDataTransfer(), preview, renderDiagnostics());
     return wrapper;
+  }
+
+  /** Auxiliary model for the extension's own requests: a SillyTavern profile or a custom URL. */
+  function renderAuxApi() {
+    const aux = { ...(snapshot.settings?.aux ?? {}) };
+    aux.purposes = { ...(aux.purposes ?? {}) };
+    const card = element('div', { className: 'card settings', style: { marginTop: '14px' } }, [
+      element('h3', { text: 'Вспомогательный API' }),
+      element('p', { className: 'muted', style: { fontSize: '11px', marginTop: '0' }, text: 'Анализ и генерация расширения могут идти через отдельную, более дешёвую модель, не нагружая основной API.' }),
+    ]);
+    const field = (label, control, hint) => element('div', { className: 'field' }, [
+      element('label', { text: label }), control, ...(hint ? [element('p', { className: 'muted', style: { fontSize: '11px', margin: '0' }, text: hint })] : []),
+    ]);
+    const mode = element('select', { 'aria-label': 'Режим вспомогательного API' });
+    for (const [value, text] of [['off', 'Выключен — всё через основной API'], ['profile', 'Профиль подключения SillyTavern'], ['custom', 'Свой URL (OpenAI-совместимый)']]) {
+      mode.append(element('option', { value, text, selected: (aux.mode || 'off') === value }));
+    }
+
+    const profileSelect = element('select', { 'aria-label': 'Профиль подключения' });
+    const fillProfiles = () => {
+      const profiles = facade.invoke('onAuxProfiles', {}) ?? [];
+      profileSelect.replaceChildren(element('option', { value: '', text: profiles.length ? 'Выберите профиль' : 'Профилей нет' }),
+        ...profiles.map(profile => element('option', { value: profile.id, text: profile.name, selected: profile.id === aux.profileId })));
+    };
+    fillProfiles();
+    const profileBlock = element('div', {}, [
+      field('Профиль', profileSelect, 'Ключ хранится в секретах SillyTavern, запрос идёт через её сервер. Профиль создаётся в Connection Manager (значок вилки в верхней панели таверны).'),
+      button('Обновить список профилей', 'btn', fillProfiles),
+    ]);
+
+    const url = element('input', { type: 'text', value: aux.url ?? '', placeholder: 'https://api.openai.com/v1', 'aria-label': 'URL API' });
+    const key = element('input', { type: 'password', value: aux.key ?? '', autocomplete: 'off', 'aria-label': 'Ключ API' });
+    const reveal = button('👁', 'icon', () => { key.type = key.type === 'password' ? 'text' : 'password'; }, 'Показать или скрыть ключ');
+    const modelList = element('datalist', { id: nextControlId('rs-aux-models') });
+    const model = element('input', { type: 'text', value: aux.model ?? '', 'aria-label': 'Модель' });
+    model.setAttribute('list', modelList.id);
+    const fetchModels = button('Получить модели', 'btn', async () => {
+      fetchModels.disabled = true;
+      try {
+        const models = await facade.invoke('onFetchAuxModels', { url: url.value, key: key.value });
+        modelList.replaceChildren(...models.map(id => element('option', { value: id })));
+        setStatus(`Моделей найдено: ${models.length} — выберите в поле «Модель»`);
+      } catch (error) { setStatus(error?.message || 'Не удалось получить список моделей', true); }
+      finally { fetchModels.disabled = false; }
+    });
+    const customBlock = element('div', {}, [
+      field('URL API', url, 'Базовый адрес OpenAI-совместимой точки, например https://api.openai.com/v1'),
+      field('Ключ API', element('div', { className: 'row', style: { flexWrap: 'nowrap' } }, [key, reveal]),
+        'Хранится в настройках расширений SillyTavern на этом сервере; в журнал диагностики и экспорт чата не попадает. Если провайдер блокирует запросы из браузера (CORS), используйте профиль подключения.'),
+      field('Модель', element('div', { className: 'row', style: { flexWrap: 'nowrap' } }, [model, fetchModels]), 'Заполните URL и ключ, затем получите список моделей.'),
+      modelList,
+    ]);
+
+    const purposes = element('div', { className: 'stack' });
+    for (const [purposeKey, label] of Object.entries(facade.invoke('onAuxPurposes', {}) ?? {})) {
+      const input = element('input', { type: 'checkbox', checked: aux.purposes[purposeKey] !== false });
+      input.addEventListener('change', () => { aux.purposes[purposeKey] = input.checked; });
+      purposes.append(element('label', { className: 'roster-item' }, [input, label]));
+    }
+    const fallback = element('input', { type: 'checkbox', checked: Boolean(aux.fallbackToMain) });
+    const maxTokens = element('input', { type: 'number', min: 256, max: 32000, value: aux.maxTokens ?? 4096, 'aria-label': 'Максимум токенов ответа' });
+    const commonBlock = element('div', {}, [
+      field('Через вспомогательный API идут:', purposes),
+      element('label', { className: 'roster-item', style: { margin: '10px 0' } }, [fallback, 'При ошибке вспомогательного API отправить запрос в основной API']),
+      field('Максимум токенов ответа', maxTokens, 'Модели с размышлениями тратят токены и на них — не ставьте слишком мало.'),
+    ]);
+
+    const collect = () => ({
+      mode: mode.value, profileId: profileSelect.value, url: url.value, key: key.value, model: model.value,
+      maxTokens: Number(maxTokens.value), fallbackToMain: fallback.checked, purposes: { ...aux.purposes },
+    });
+    const sync = () => {
+      profileBlock.hidden = mode.value !== 'profile';
+      customBlock.hidden = mode.value !== 'custom';
+      commonBlock.hidden = mode.value === 'off';
+    };
+    mode.addEventListener('change', sync);
+    sync();
+    const test = button('Проверить', 'btn', async () => {
+      test.disabled = true;
+      setStatus('Проверяю вспомогательный API…');
+      try { setStatus(await facade.invoke('onTestAux', { aux: collect() })); }
+      catch (error) { setStatus(error?.message || 'Вспомогательный API не ответил', true); }
+      finally { test.disabled = false; }
+    });
+    const save = button('Сохранить', 'btn primary', () => {
+      act('onSettingsChange', { settings: { aux: collect() } }, 'settings-change');
+      setStatus('Вспомогательный API сохранён');
+    });
+    card.append(field('Режим', mode), profileBlock, customBlock, commonBlock, element('div', { className: 'row', style: { marginTop: '10px' } }, [save, test]));
+    return card;
   }
 
   function renderDiagnostics() {

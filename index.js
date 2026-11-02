@@ -22,6 +22,7 @@ import { pairTropeFactors, pairTropePace, pairTropes, triangleTropeFactors, tria
 import { getAnalysisTokenUsage } from './src/integration/analyzer.js';
 import { onChangeBusy, getBusy, resetBusy } from './src/integration/busy.js';
 import { clearLog, formatLog, logEvent } from './src/integration/diagnostics.js';
+import { AUX_PURPOSES, auxGenerate, fetchAuxModels, listAuxProfiles, routedContext } from './src/integration/llm.js';
 import { triangleEdges } from './src/core/records.js';
 import { mountExtensionShell } from './src/integration/shell.js';
 import { mountMessageButtons } from './src/integration/message-buttons.js';
@@ -33,6 +34,20 @@ const MESSAGE_EXTRA_KEY = 'relationshipEngineV1';
 /** Plain on/off preferences edited as checkboxes in the Studio settings. */
 const TOGGLE_SETTINGS = ['linkedScales', 'autoCharacterLines', 'confirmPersonaLines', 'sendMemories', 'sendTensions', 'sendFactors'];
 let controller = null;
+
+function normalizeAux(aux) {
+  const mode = ['off', 'profile', 'custom'].includes(aux?.mode) ? aux.mode : 'off';
+  return {
+    mode,
+    profileId: String(aux?.profileId ?? '').slice(0, 200),
+    url: String(aux?.url ?? '').trim().slice(0, 500),
+    key: String(aux?.key ?? '').trim().slice(0, 500),
+    model: String(aux?.model ?? '').trim().slice(0, 200),
+    maxTokens: Math.max(256, Math.min(32000, Math.round(Number(aux?.maxTokens)) || 4096)),
+    fallbackToMain: Boolean(aux?.fallbackToMain),
+    purposes: Object.fromEntries(Object.keys(AUX_PURPOSES).map(key => [key, aux?.purposes?.[key] !== false])),
+  };
+}
 
 /** SillyTavern popups render their text as HTML. */
 function escapeHtml(value) {
@@ -83,6 +98,7 @@ export async function init() {
       settings: {
         autoTrack: settings.autoAnalyze, widgetEnabled: settings.widget.visible,
         maxPromptCharacters: settings.maxPromptCharacters,
+        aux: structuredClone(settings.aux),
         ...Object.fromEntries(TOGGLE_SETTINGS.map(key => [key, settings[key] !== false])),
       },
       widget: {
@@ -273,6 +289,7 @@ export async function init() {
       const limit = Math.round(Number(patch.maxPromptCharacters));
       if (Number.isFinite(limit)) settings.maxPromptCharacters = Math.max(800, Math.min(20000, limit));
     }
+    if (patch.aux && typeof patch.aux === 'object') settings.aux = normalizeAux({ ...settings.aux, ...patch.aux });
     context.saveSettingsDebounced();
     widget.element.hidden = !settings.widget.visible;
     refreshPrompt();
@@ -342,7 +359,7 @@ export async function init() {
     for (const bookName of books) {
       const book = await ctx.loadWorldInfo(bookName);
       if (!book?.entries) throw new Error(`Не удалось прочитать лорбук «${bookName}».`);
-      const { characters, knownAliases } = await analyzeLorebookCharacters(ctx, book, bookName, knownEntities);
+      const { characters, knownAliases } = await analyzeLorebookCharacters(routedContext(ctx, settings, 'discovery'), book, bookName, knownEntities);
       for (const update of knownAliases) {
         const entity = state.entities[update.id];
         if (!entity) continue;
@@ -416,7 +433,7 @@ export async function init() {
     if (!batches.length) throw new Error('В чате нет сюжетных сообщений.');
     onProgress('Ищу персонажей в истории…');
     const knownEntities = Object.values(state.entities).map(entity => ({ id: entity.id, name: entity.name, aliases: entity.aliases ?? [] }));
-    const { characters: discovered, knownAliases } = await discoverHistoryCharacters(ctx, sampleHistory(messages, settings.analysisMaxCharacters * 2), settings, knownEntities, cardContext(ctx));
+    const { characters: discovered, knownAliases } = await discoverHistoryCharacters(routedContext(ctx, settings, 'discovery'), sampleHistory(messages, settings.analysisMaxCharacters * 2), settings, knownEntities, cardContext(ctx));
     assertCurrent();
     // Registry-aware dedup: never re-add persons the model or transliteration already knows.
     const registryKeys = new Set();
@@ -485,7 +502,7 @@ export async function init() {
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
       assertCurrent();
       onProgress(`Анализирую историю: пакет ${batchIndex + 1} из ${batches.length}…`);
-      const result = await analyzeHistoryBatch(ctx, next, batches[batchIndex], settings, loreContext);
+      const result = await analyzeHistoryBatch(routedContext(ctx, settings, 'analysis'), next, batches[batchIndex], settings, loreContext);
       assertCurrent();
       // History analysis is started by the user explicitly, so persona lines are not asked one by one;
       // only the "no automatic character lines" setting applies.
@@ -631,7 +648,7 @@ export async function init() {
       if (isGenerationActive()) await waitForGenerationEnd();
       const triangle = findTriangle(id);
       const loreContext = await loadLinkedLore(SillyTavern.getContext(), state);
-      return generateTriangleGoal(SillyTavern.getContext(), state, triangle, { loreContext, wish });
+      return generateTriangleGoal(routedContext(SillyTavern.getContext(), settings, 'generation'), state, triangle, { loreContext, wish });
     },
     onTriangleLines: ({ id }) => triangleLines(findTriangle(id)),
     onGenerateTriangleFactors: async ({ id, goal }) => {
@@ -639,7 +656,7 @@ export async function init() {
       const triangle = findTriangle(id);
       const lines = triangleLines(triangle);
       const loreContext = await loadLinkedLore(SillyTavern.getContext(), state);
-      const factors = await generateTriangleFactors(SillyTavern.getContext(), state, triangle, lines, { goal: goal ?? triangle.goal, loreContext });
+      const factors = await generateTriangleFactors(routedContext(SillyTavern.getContext(), settings, 'generation'), state, triangle, lines, { goal: goal ?? triangle.goal, loreContext });
       return withLineIds(factors);
     },
     onTriangleTropes: () => triangleTropes(),
@@ -707,7 +724,7 @@ export async function init() {
       const id = relationshipId(sourceId, targetId);
       if (!state.relationships[id]) throw new Error('Сначала создайте линию.');
       const loreContext = await loadLinkedLore(SillyTavern.getContext(), state);
-      const factors = await generateGrowthFactors(SillyTavern.getContext(), state, sourceId, targetId, {
+      const factors = await generateGrowthFactors(routedContext(SillyTavern.getContext(), settings, 'generation'), state, sourceId, targetId, {
         directionId, customDirection, loreContext,
       });
       const merged = replace ? factors : [...(state.relationships[id].factors ?? []), ...factors];
@@ -862,9 +879,23 @@ export async function init() {
       'Экран': `${globalThis.innerWidth ?? '?'}×${globalThis.innerHeight ?? '?'}`,
       'Автоанализ': settings.autoAnalyze ? 'вкл' : 'выкл',
       'Инъекция': settings.enabled && settings.injectPrompt ? 'вкл' : 'выкл',
+      // Never the key or the URL: only which mode is used.
+      'Вспомогательный API': settings.aux?.mode === 'profile' ? 'профиль подключения' : settings.aux?.mode === 'custom' ? 'свой URL' : 'выкл',
       'Персонажей / линий': `${Object.keys(state.entities).length} / ${Object.keys(state.relationships).length}`,
     }),
     onClearDiagnostics: () => { clearLog(); notify(); },
+    onAuxProfiles: () => listAuxProfiles(SillyTavern.getContext()),
+    onAuxPurposes: () => ({ ...AUX_PURPOSES }),
+    onFetchAuxModels: ({ url, key }) => fetchAuxModels(url, key),
+    /** A tiny request with the settings being edited (not yet saved). */
+    onTestAux: async ({ aux }) => {
+      const candidate = normalizeAux({ ...settings.aux, ...aux });
+      if (candidate.mode === 'off') throw new Error('Вспомогательный API выключен.');
+      const started = Date.now();
+      const reply = await auxGenerate(SillyTavern.getContext(), candidate, [{ role: 'user', content: 'Reply with the single word OK.' }]);
+      logEvent('info', `Проверка вспомогательного API: ответ за ${Date.now() - started} мс`);
+      return `Ответ получен за ${((Date.now() - started) / 1000).toFixed(1)} с: «${String(reply).trim().slice(0, 60)}»`;
+    },
     onAnalyzeCurrent: () => runManualCheck(lastBotMessageIndex()),
     onAnalyzeHistory: enqueueHistory,
     onAnalyzeLorebooks: analyzeLorebooksForCharacters,
@@ -975,12 +1006,12 @@ export async function init() {
     const markHidden = () => { if (isPageHidden()) hiddenDuringRequest = true; };
     document.addEventListener('visibilitychange', markHidden);
     try {
-      return await analyzeMessage(ctx, sourceState, message, settings, loreContext);
+      return await analyzeMessage(routedContext(ctx, settings, 'analysis'), sourceState, message, settings, loreContext);
     } catch (error) {
       if (!hiddenDuringRequest) throw error;
       logEvent('warn', 'Запрос анализа прервался, пока вкладка была скрыта — повторяю', error);
       await waitUntilVisible();
-      return analyzeMessage(ctx, sourceState, message, settings, loreContext);
+      return analyzeMessage(routedContext(ctx, settings, 'analysis'), sourceState, message, settings, loreContext);
     } finally {
       document.removeEventListener('visibilitychange', markHidden);
     }
