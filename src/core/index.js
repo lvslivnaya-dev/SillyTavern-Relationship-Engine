@@ -9,3 +9,6 @@ export {
 export { createSnapshot, restoreSnapshot } from './snapshots.js';
 export { exportState, importState, migrateState } from './persistence.js';
 export { selectRuntimePrompt } from './prompt.js';
+export {
+  addHeadcanons, dropAutoHeadcanons, headcanonKey, headcanonPairIds, isAutoHeadcanons, listHeadcanonPairs, selectHeadcanons, updateHeadcanons,
+} from './headcanons.js';

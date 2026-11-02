@@ -12,7 +12,7 @@ const STYLE = `
 `;
 
 const TABS = [
-  ['overview', 'Обзор'], ['memories', 'Воспоминания'], ['tensions', 'Напряжения'],
+  ['overview', 'Обзор'], ['memories', 'Воспоминания'], ['tensions', 'Напряжения'], ['headcanons', 'Хедканоны'],
   ['triangles', 'Треугольники'], ['journal', 'История'], ['lorebooks', 'Лорбуки'], ['settings', 'Настройки'],
 ];
 
@@ -31,11 +31,13 @@ export function createRelationshipStudio(options = {}) {
   let selectedForRemoval = new Set();
   let toolsOpen = false; // phone only: persona/pair block is collapsible
   // Overview sections; character-to-character lines start collapsed to keep the screen clean.
-  const folds = { characters: false, personaLines: true, characterLines: false, allLines: true, newMemory: false, newTension: false };
+  const folds = { characters: false, personaLines: true, characterLines: false, allLines: true, newMemory: false, newTension: false, newHeadcanon: true };
   let scaleEditorPairId = null; // overview card whose scale checklist is open
   let editingRecordId = null; // memory/tension shown as an inline editor
   let selectedPairs = new Set(); // overview lines ticked for bulk removal
   let triangleSetupId = null; // triangle whose setup sheet is open in the factors layer
+  let openHeadcanonKey = null; // headcanons tab: the pair being viewed ("a|b")
+  let editingHeadcanonId = null;
   const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
 
   const style = element('style', { text: STYLE + `
@@ -90,6 +92,17 @@ export function createRelationshipStudio(options = {}) {
     .pair-swap:disabled{opacity:.4;cursor:default}
     .pair-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:14px}
     .pair-card-head h3{margin:0;min-width:0;overflow-wrap:anywhere}
+    .pair-flags{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:0 0 auto}
+    .headcanon-pairs{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,240px),1fr));gap:10px}
+    .headcanon-pair{display:grid;gap:4px;text-align:left;padding:12px 14px;border:1px solid var(--rs-line);border-radius:10px;background:var(--rs-inset);color:var(--rs-text);cursor:pointer;font:inherit}
+    .headcanon-pair:hover,.headcanon-pair:focus-visible{border-color:var(--rs-accent);outline:none}
+    .headcanon-pair .muted{font-size:12px}
+    .headcanon-auto{font-size:11px;color:var(--rs-muted)}
+    .headcanon-auto.on{color:var(--rs-accent)}
+    .headcanon-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+    .headcanon-head h3{margin:0}
+    .headcanon-view{margin:0 0 10px;padding:0 0 10px;border-bottom:1px dashed var(--rs-line);line-height:1.45;overflow-wrap:anywhere}
+    .headcanon-view.off{opacity:.45}
     .pair-title{display:flex;align-items:flex-start;gap:8px;min-width:0;cursor:pointer}
     .pair-title input{width:15px;height:15px;margin:2px 0 0;flex:0 0 auto}
     .relationship-card.selected{border-color:var(--rs-danger)}
@@ -859,11 +872,11 @@ export function createRelationshipStudio(options = {}) {
     const content = element('main', { className: 'content' });
     const hero = element('div', { className: 'hero' }, [
       element('p', { className: 'section-title', text: TABS.find(([id]) => id === tab)?.[1] || tab }),
-      element('h2', { text: tab === 'overview' ? 'Все отношения' : tab === 'lorebooks' ? 'Подключённые лорбуки' : tab === 'journal' ? 'История изменений' : tab === 'settings' ? 'Настройки' : pairLabel(snapshot, pair) }),
+      element('h2', { text: tab === 'overview' ? 'Все отношения' : tab === 'lorebooks' ? 'Подключённые лорбуки' : tab === 'journal' ? 'История изменений' : tab === 'settings' ? 'Настройки' : tab === 'headcanons' ? 'Хедканоны отношений' : pairLabel(snapshot, pair) }),
       ...(tab === 'overview' ? [element('span', { className: 'muted', text: 'Направление важно: обратная связь редактируется отдельно.' })] : []),
     ]);
     content.append(hero);
-    if (!pair && !['overview', 'journal', 'settings', 'lorebooks', 'memories', 'tensions', 'triangles'].includes(tab)) {
+    if (!pair && !['overview', 'journal', 'settings', 'lorebooks', 'memories', 'tensions', 'triangles', 'headcanons'].includes(tab)) {
       content.append(element('div', { className: 'empty', text: 'Для начала выберите двух разных персонажей.' }));
       return content;
     }
@@ -873,6 +886,7 @@ export function createRelationshipStudio(options = {}) {
           : tab === 'journal' ? renderJournal()
             : tab === 'lorebooks' ? renderLorebooks()
               : tab === 'triangles' ? renderTriangles()
+                : tab === 'headcanons' ? renderHeadcanons()
             : renderSettings();
     content.append(view);
     return content;
@@ -947,6 +961,11 @@ export function createRelationshipStudio(options = {}) {
       const strangersInput = element('input', { type: 'checkbox', checked: (snapshot.ui?.strangerPairs ?? []).includes(strangerKey) });
       strangersInput.addEventListener('change', () => act('onToggleStrangers', { relationshipId: pairId(pair), strangers: strangersInput.checked }, 'strangers-toggle'));
       const strangers = element('label', { className: 'strangers-toggle', title: 'Модель будет помнить, что они ещё не представлены друг другу и не знают имён. Действует в обе стороны. Снимите после знакомства.' }, [strangersInput, 'Незнакомы']);
+      // Headcanons belong to the unordered pair, the same key as strangers.
+      const headcanonCount = (snapshot.ui?.headcanons?.[strangerKey]?.items ?? []).length;
+      const autoHeadInput = element('input', { type: 'checkbox', checked: Boolean(facade.invoke('onAutoHeadcanons', { key: strangerKey })) });
+      autoHeadInput.addEventListener('change', () => act('onSetHeadcanonAuto', { key: strangerKey, auto: autoHeadInput.checked }, 'headcanon-auto'));
+      const autoHead = element('label', { className: 'strangers-toggle', title: 'Автозаполнение хедканонов этой пары по ходу игры' }, [autoHeadInput, 'Авто-хедканоны']);
       const isSelected = selectedPairs.has(pairId(pair));
       const selectInput = element('input', { type: 'checkbox', checked: isSelected, className: 'pair-select', 'aria-label': `Выбрать линию ${pairLabel(snapshot, pair)}` });
       selectInput.addEventListener('change', () => {
@@ -956,11 +975,12 @@ export function createRelationshipStudio(options = {}) {
       const card = element('article', { className: `card relationship-card${isSelected ? ' selected' : ''}` }, [
         element('div', { className: 'pair-card-head' }, [
           element('label', { className: 'pair-title', title: 'Отметить для удаления' }, [selectInput, element('h3', { text: pairLabel(snapshot, pair) })]),
-          strangers,
+          element('div', { className: 'pair-flags' }, [strangers, autoHead]),
         ]),
         editingScales ? renderScaleEditor(pair) : renderOverview(pair),
         element('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--rs-line, #303a49)' } }, [
           button('Факторы роста', 'btn', () => openFactors(pairId(pair))),
+          button(`Хедканоны (${headcanonCount})`, 'btn', () => openHeadcanonViewer(strangerKey), 'Посмотреть хедканоны этой пары'),
           button(editingScales ? 'Готово' : `Шкалы${hiddenCount ? ` (скрыто ${hiddenCount})` : ''}`, editingScales ? 'btn primary' : 'btn', () => {
             scaleEditorPairId = editingScales ? null : pairId(pair);
             render();
@@ -1223,6 +1243,190 @@ export function createRelationshipStudio(options = {}) {
       } finally { save.disabled = false; }
     });
     return form;
+  }
+
+  const HEADCANON_SOURCES = { manual: 'вручную', lore: 'из лора и чата', auto: 'по ходу игры' };
+
+  function headcanonEntry(key) {
+    return snapshot.ui?.headcanons?.[key] ?? { items: [] };
+  }
+
+  /** Unordered pairs of the existing lines (A → B and B → A are one pair here). */
+  function headcanonLinePairs() {
+    const seen = new Map();
+    for (const pair of snapshot.pairs || []) {
+      const ids = [pairSource(pair), pairTarget(pair)];
+      let key;
+      try { key = facade.invoke('onHeadcanonKey', { firstId: ids[0], secondId: ids[1] }); } catch { continue; }
+      if (!seen.has(key)) seen.set(key, ids.map(id => nameOf(id)).join(' & '));
+    }
+    return [...seen].map(([key, label]) => ({ key, label })).sort((left, right) => left.label.localeCompare(right.label, 'ru-RU'));
+  }
+
+  function renderHeadcanons() {
+    if (openHeadcanonKey) {
+      const ids = openHeadcanonKey.split('|');
+      if (ids.every(id => (snapshot.characters || []).some(character => characterId(character) === id))) return renderHeadcanonPair(openHeadcanonKey);
+      openHeadcanonKey = null;
+    }
+    const container = element('div', { className: 'records-view' });
+    // Picker: an existing line, or any two characters when there is no line yet.
+    const linePairs = headcanonLinePairs();
+    const lineSelect = themedSelect({
+      options: [{ value: '', label: linePairs.length ? 'Выберите линию' : 'Линий пока нет' }, ...linePairs.map(item => ({ value: item.key, label: item.label }))],
+      label: 'Линия', onChange: value => { if (value) { openHeadcanonKey = value; render(); } },
+    });
+    const characterOptions = [{ value: '', label: 'Персонаж' }, ...(snapshot.characters || []).map(character => ({ value: characterId(character), label: characterName(character) }))];
+    let firstId = '';
+    let secondId = '';
+    const firstSelect = themedSelect({ options: characterOptions, label: 'Первый персонаж', onChange: value => { firstId = value; } });
+    const secondSelect = themedSelect({ options: characterOptions, label: 'Второй персонаж', onChange: value => { secondId = value; } });
+    const openPair = button('Открыть пару', 'btn primary', () => {
+      try {
+        openHeadcanonKey = facade.invoke('onHeadcanonKey', { firstId, secondId });
+        render();
+      } catch (error) { setStatus(error?.message || 'Выберите двух разных персонажей', true); }
+    });
+    container.append(element('div', { className: 'card' }, [
+      element('h3', { text: 'Выбрать пару' }),
+      element('div', { className: 'record-filters' }, [
+        element('div', { className: 'field' }, [element('label', { text: 'Линия' }), lineSelect]),
+      ]),
+      element('p', { className: 'muted', style: { fontSize: '11px', margin: '0 0 8px' }, text: 'Если линии между ними ещё нет — выберите двух персонажей:' }),
+      element('div', { className: 'record-filters' }, [
+        element('div', { className: 'field' }, [element('label', { text: 'Персонаж' }), firstSelect]),
+        element('div', { className: 'field' }, [element('label', { text: 'Персонаж' }), secondSelect]),
+      ]),
+      openPair,
+    ]));
+
+    const pairs = snapshot.headcanonPairs || [];
+    const list = element('div', { className: 'headcanon-pairs' });
+    for (const pair of pairs) {
+      const card = element('button', { type: 'button', className: 'headcanon-pair' }, [
+        element('strong', { text: pair.label }),
+        element('span', { className: 'muted', text: `хедканонов: ${pair.items.length}, включено: ${pair.enabledCount}` }),
+        element('span', { className: pair.auto ? 'headcanon-auto on' : 'headcanon-auto', text: pair.auto ? 'автозаполнение вкл' : 'автозаполнение выкл' }),
+      ]);
+      card.addEventListener('click', () => { openHeadcanonKey = pair.key; render(); });
+      list.append(card);
+    }
+    container.append(element('div', { className: 'card' }, [
+      element('h3', { text: 'Пары с хедканонами' }),
+      pairs.length ? list : element('div', { className: 'empty', text: 'Хедканонов пока нет. Выберите пару выше.' }),
+    ]));
+    return container;
+  }
+
+  function renderHeadcanonPair(key) {
+    const ids = key.split('|');
+    const label = ids.map(id => nameOf(id)).join(' & ');
+    const entry = headcanonEntry(key);
+    const items = entry.items ?? [];
+    const auto = Boolean(facade.invoke('onAutoHeadcanons', { key }));
+    const autoInput = element('input', { type: 'checkbox', checked: auto });
+    autoInput.addEventListener('change', () => act('onSetHeadcanonAuto', { key, auto: autoInput.checked }, 'headcanon-auto'));
+    const generate = button('Сгенерировать из лорбука и чата', 'btn', async () => {
+      generate.disabled = true;
+      setStatus('Генерирую хедканоны…');
+      try {
+        const added = await facade.invoke('onGenerateHeadcanons', { key });
+        setStatus(`Добавлено хедканонов: ${added}`);
+      } catch (error) { setStatus(error?.message || 'Не удалось сгенерировать хедканоны', true); }
+      finally { generate.disabled = false; }
+    });
+    if (snapshot.modelBusy) generate.disabled = true;
+
+    const head = element('div', { className: 'card' }, [
+      element('div', { className: 'headcanon-head' }, [
+        button('← Все пары', 'btn', () => { openHeadcanonKey = null; editingHeadcanonId = null; render(); }),
+        element('h3', { text: label }),
+      ]),
+      element('label', { className: 'roster-item', style: { margin: '10px 0 4px' } }, [autoInput, 'Автозаполнение по ходу игры']),
+      element('p', { className: 'muted', style: { fontSize: '11px', margin: '0 0 10px' }, text: snapshot.settings?.autoHeadcanons
+        ? 'Новые устойчивые факты о паре анализатор будет добавлять сам, когда проверяет ответы.'
+        : 'Общее автозаполнение выключено в настройках — галочка заработает, когда его включат.' }),
+      generate,
+    ]);
+
+    const form = element('form', { className: 'record-form' });
+    const text = element('textarea', { placeholder: 'Один факт — один хедканон. Несколько — каждый с новой строки.', 'aria-label': 'Новые хедканоны' });
+    const add = button('Добавить', 'btn primary', () => {});
+    add.type = 'submit';
+    form.append(text, add);
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const texts = text.value.split('\n').map(line => line.trim()).filter(Boolean);
+      if (!texts.length) return;
+      try {
+        const added = await facade.invoke('onAddHeadcanons', { key, texts });
+        text.value = '';
+        setStatus(added ? `Добавлено хедканонов: ${added}` : 'Такие хедканоны уже есть');
+      } catch (error) { setStatus(error?.message || 'Не удалось добавить', true); }
+    });
+
+    const list = element('div', { className: 'record-list' });
+    for (const item of [...items].reverse()) {
+      if (editingHeadcanonId === item.id) {
+        const editor = element('form', { className: 'record editing' });
+        const input = element('textarea', { value: item.text, 'aria-label': 'Текст хедканона' });
+        const save = button('Сохранить', 'btn primary', () => {});
+        save.type = 'submit';
+        editor.append(input, element('div', { className: 'record-actions' }, [save, button('Отмена', 'btn', () => { editingHeadcanonId = null; render(); })]));
+        editor.addEventListener('submit', async event => {
+          event.preventDefault();
+          try {
+            await facade.invoke('onUpdateHeadcanon', { key, id: item.id, text: input.value });
+            editingHeadcanonId = null;
+            render();
+          } catch (error) { setStatus(error?.message || 'Не удалось сохранить', true); }
+        });
+        list.append(editor);
+        continue;
+      }
+      const enabled = element('input', { type: 'checkbox', checked: item.enabled !== false, 'aria-label': 'Отправлять модели' });
+      enabled.addEventListener('change', () => act('onUpdateHeadcanon', { key, id: item.id, enabled: enabled.checked }, 'headcanon-toggle'));
+      list.append(element('article', { className: `record headcanon${item.enabled === false ? ' off' : ''}` }, [
+        element('div', { className: 'record-head' }, [
+          element('label', { className: 'roster-item', title: 'Выключенный хедканон не отправляется модели' }, [enabled, item.enabled === false ? 'выключен' : 'включён']),
+          element('span', { className: 'record-badge', text: HEADCANON_SOURCES[item.source] ?? 'вручную' }),
+          element('time', { text: formatTime(item.createdAt) }),
+        ]),
+        element('p', { className: 'record-text', text: item.text }),
+        element('div', { className: 'record-actions' }, [
+          button('Изменить', 'btn', () => { editingHeadcanonId = item.id; render(); }),
+          button('Удалить', 'btn', () => act('onRemoveHeadcanon', { key, id: item.id }, 'headcanon-remove')),
+        ]),
+      ]));
+    }
+    return element('div', { className: 'records-view' }, [
+      head,
+      fold('newHeadcanon', '+ Новые хедканоны', '', form),
+      element('div', { className: 'card' }, [
+        element('div', { className: 'record-list-head' }, [element('h3', { text: 'Хедканоны' }), element('span', { className: 'muted', text: `${items.filter(item => item.enabled !== false).length} из ${items.length} включено` })]),
+        items.length ? list : element('div', { className: 'empty', text: 'Хедканонов пока нет.' }),
+      ]),
+    ]);
+  }
+
+  /** Read-only list for the overview card: just the facts, no editing. */
+  function openHeadcanonViewer(key) {
+    const items = headcanonEntry(key).items ?? [];
+    factorsPairId = null;
+    triangleSetupId = null;
+    const sheet = element('div', { className: 'factors-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Хедканоны' });
+    const body = element('div', { className: 'factors-body' });
+    if (!items.length) body.append(element('p', { className: 'muted', text: 'Хедканонов пока нет.' }));
+    for (const item of items) body.append(element('p', { className: `headcanon-view${item.enabled === false ? ' off' : ''}`, text: item.text }));
+    const edit = button('Открыть во вкладке', 'btn primary', () => { closeFactors(); tab = 'headcanons'; openHeadcanonKey = key; render(); });
+    sheet.append(
+      element('div', { className: 'factors-head' }, [element('h3', { text: `Хедканоны: ${key.split('|').map(id => nameOf(id)).join(' & ')}` })]),
+      body,
+      element('div', { className: 'factors-foot' }, [edit, button('Закрыть', 'btn factors-close', closeFactors)]),
+    );
+    factorsLayer.replaceChildren(sheet);
+    factorsLayer.hidden = false;
+    fitFactorsToViewport();
   }
 
   function renderTriangles() {

@@ -7,6 +7,14 @@ import {
   importState,
   relationshipId,
   rollbackMessage,
+  addHeadcanons,
+  dropAutoHeadcanons,
+  headcanonKey,
+  headcanonPairIds,
+  isAutoHeadcanons,
+  listHeadcanonPairs,
+  selectHeadcanons,
+  updateHeadcanons,
   selectRuntimePrompt,
   uniqueId,
 } from './src/core/index.js';
@@ -17,7 +25,7 @@ import { getSettings } from './src/integration/settings.js';
 import { createHistoryBatches, rebuildWithoutAutomaticHistory, historyFingerprint, sampleHistory } from './src/integration/history.js';
 import { applyAnalysisResult, describeProposedChanges } from './src/integration/analysis-operations.js';
 import { loadLinkedLore, analyzeLorebookCharacters, canonKeys, namesMatch } from './src/integration/lorebooks.js';
-import { generateGrowthFactors, directionPresets, generateTriangleFactors, generateTriangleGoal } from './src/integration/growth.js';
+import { generateGrowthFactors, directionPresets, generateTriangleFactors, generateTriangleGoal, generateHeadcanons } from './src/integration/growth.js';
 import { pairTropeFactors, pairTropePace, pairTropes, triangleTropeFactors, triangleTropes, tropeLabel } from './src/integration/tropes.js';
 import { getAnalysisTokenUsage } from './src/integration/analyzer.js';
 import { onChangeBusy, getBusy, resetBusy } from './src/integration/busy.js';
@@ -26,13 +34,14 @@ import { AUX_PURPOSES, auxGenerate, fetchAuxModels, listAuxProfiles, routedConte
 import { triangleEdges } from './src/core/records.js';
 import { mountExtensionShell } from './src/integration/shell.js';
 import { mountMessageButtons } from './src/integration/message-buttons.js';
+import { mentionScorer, recentSceneText } from './src/integration/headcanon-retrieval.js';
 import { createChatStorage } from './src/integration/storage.js';
 import { createRelationshipStudio } from './src/ui/studio.js';
 import { createRelationshipWidget } from './src/ui/widget.js';
 
 const MESSAGE_EXTRA_KEY = 'relationshipEngineV1';
 /** Plain on/off preferences edited as checkboxes in the Studio settings. */
-const TOGGLE_SETTINGS = ['linkedScales', 'autoCharacterLines', 'confirmPersonaLines', 'sendMemories', 'sendTensions', 'sendFactors'];
+const TOGGLE_SETTINGS = ['linkedScales', 'autoCharacterLines', 'confirmPersonaLines', 'sendMemories', 'sendTensions', 'sendFactors', 'sendHeadcanons', 'autoHeadcanons'];
 let controller = null;
 
 function normalizeAux(aux) {
@@ -84,6 +93,8 @@ export async function init() {
     const chatPersona = chatAvatar ? (tavernList.find(item => item.avatarId === chatAvatar)?.name ?? '') : '';
     return {
       ...state,
+      headcanonPairs: listHeadcanonPairs(state),
+      sceneHeadcanons: [...sceneHeadcanons],
       pairs: Object.values(state.relationships).filter(relation => relation.from !== persona),
       widgetPairs: Object.values(state.relationships)
         .filter(relation => relation.from !== persona)
@@ -98,6 +109,7 @@ export async function init() {
       settings: {
         autoTrack: settings.autoAnalyze, widgetEnabled: settings.widget.visible,
         maxPromptCharacters: settings.maxPromptCharacters,
+        headcanonLimit: settings.headcanonLimit,
         aux: structuredClone(settings.aux),
         ...Object.fromEntries(TOGGLE_SETTINGS.map(key => [key, settings[key] !== false])),
       },
@@ -166,7 +178,52 @@ export async function init() {
       includeTensions: settings.sendTensions !== false,
       includeFactors: settings.sendFactors !== false,
       maxCharacters: Number(settings.maxPromptCharacters) || 4000,
-    });
+    }) + (settings.sendHeadcanons !== false && sceneHeadcanons.length ? `\n${sceneHeadcanons.join('\n')}` : '');
+  }
+
+  function assertHeadcanonPair(key) {
+    const ids = headcanonPairIds(key);
+    if (ids.length !== 2 || ids.some(id => !state.entities[id])) throw new Error('Персонаж не найден.');
+  }
+
+  function isAutoHeadcanonsFor(key) {
+    return isAutoHeadcanons(state, key);
+  }
+
+  async function commitHeadcanons(headcanons) {
+    const next = structuredClone(state);
+    next.ui ??= {};
+    next.ui.headcanons = headcanons;
+    await commit(next, true);
+    await prepareHeadcanons();
+    refreshPrompt();
+  }
+
+  // Headcanons picked for the current scene; refreshed before every generation
+  // (generate interceptor) and when the chat or the headcanons change.
+  let sceneHeadcanons = [];
+
+  async function prepareHeadcanons(chat = SillyTavern.getContext().chat) {
+    try {
+      if (settings.sendHeadcanons === false || !Object.keys(state.ui?.headcanons ?? {}).length) {
+        sceneHeadcanons = [];
+        return;
+      }
+      const sceneText = recentSceneText(chat);
+      sceneHeadcanons = selectHeadcanons(state, {
+        score: await headcanonScorer(sceneText),
+        limit: Math.max(1, Math.min(30, Number(settings.headcanonLimit) || 8)),
+        maxCharacters: 1500,
+      });
+    } catch (error) {
+      logEvent('error', 'Не удалось отобрать хедканоны для сцены', error);
+      sceneHeadcanons = [];
+    }
+  }
+
+  /** Mention-based ranking for now; the semantic one plugs in here when embeddings are on. */
+  async function headcanonScorer(sceneText) {
+    return mentionScorer(state, sceneText);
   }
 
   function refreshPrompt() {
@@ -288,6 +345,10 @@ export async function init() {
     if (Object.hasOwn(patch, 'maxPromptCharacters')) {
       const limit = Math.round(Number(patch.maxPromptCharacters));
       if (Number.isFinite(limit)) settings.maxPromptCharacters = Math.max(800, Math.min(20000, limit));
+    }
+    if (Object.hasOwn(patch, 'headcanonLimit')) {
+      const limit = Math.round(Number(patch.headcanonLimit));
+      if (Number.isFinite(limit)) settings.headcanonLimit = Math.max(1, Math.min(30, limit));
     }
     if (patch.aux && typeof patch.aux === 'object') settings.aux = normalizeAux({ ...settings.aux, ...patch.aux });
     context.saveSettingsDebounced();
@@ -856,6 +917,46 @@ export async function init() {
     onImport: importFromStudio,
     onExport: exportForStudio,
     onSettingsChange: changeSettings,
+    onHeadcanonKey: ({ firstId, secondId }) => headcanonKey(firstId, secondId),
+    onAutoHeadcanons: ({ key }) => isAutoHeadcanonsFor(key),
+    onAddHeadcanons: async ({ key, texts }) => {
+      assertHeadcanonPair(key);
+      const { headcanons, added } = addHeadcanons(state, key, texts ?? [], { source: 'manual' });
+      await commitHeadcanons(headcanons);
+      return added;
+    },
+    onUpdateHeadcanon: async ({ key, id, text, enabled }) => {
+      assertHeadcanonPair(key);
+      await commitHeadcanons(updateHeadcanons(state, key, entry => {
+        const item = entry.items.find(candidate => candidate.id === id);
+        if (!item) throw new Error('Хедканон не найден.');
+        if (text != null) {
+          const value = String(text).replace(/\s+/g, ' ').trim().slice(0, 400);
+          if (!value) throw new Error('Текст хедканона пуст.');
+          item.text = value;
+        }
+        if (enabled != null) item.enabled = Boolean(enabled);
+      }));
+    },
+    onRemoveHeadcanon: async ({ key, id }) => {
+      assertHeadcanonPair(key);
+      await commitHeadcanons(updateHeadcanons(state, key, entry => { entry.items = entry.items.filter(item => item.id !== id); }));
+    },
+    onSetHeadcanonAuto: async ({ key, auto }) => {
+      assertHeadcanonPair(key);
+      await commitHeadcanons(updateHeadcanons(state, key, entry => { entry.auto = Boolean(auto); }));
+    },
+    onGenerateHeadcanons: async ({ key }) => {
+      assertHeadcanonPair(key);
+      if (isGenerationActive()) await waitForGenerationEnd();
+      const [firstId, secondId] = headcanonPairIds(key);
+      const loreContext = await loadLinkedLore(SillyTavern.getContext(), state);
+      const existing = (state.ui?.headcanons?.[key]?.items ?? []).map(item => item.text);
+      const texts = await generateHeadcanons(routedContext(SillyTavern.getContext(), settings, 'generation'), state, firstId, secondId, { loreContext, existing });
+      const { headcanons, added } = addHeadcanons(state, key, texts, { source: 'lore' });
+      await commitHeadcanons(headcanons);
+      return added;
+    },
     onToggleStrangers: async ({ relationshipId: id, strangers }) => {
       const relation = state.relationships[id];
       if (!relation) throw new Error('Линия не найдена.');
@@ -913,6 +1014,8 @@ export async function init() {
       { key: 'sendMemories', label: 'Отправлять модели воспоминания', type: 'checkbox' },
       { key: 'sendTensions', label: 'Отправлять модели напряжения', type: 'checkbox' },
       { key: 'sendFactors', label: 'Отправлять модели факторы роста', type: 'checkbox' },
+      { key: 'sendHeadcanons', label: 'Отправлять модели хедканоны (только подходящие к сцене)', type: 'checkbox' },
+      { key: 'headcanonLimit', label: 'Сколько хедканонов к сцене, не больше (1–30)', type: 'number', min: 1, max: 30 },
       { key: 'maxPromptCharacters', label: 'Объём данных для модели, символов (800–20000; ~1 токен на 3–4 символа). Не влезает всё — уходят самые слабые линии и старые записи.', type: 'number', min: 800, max: 20000 },
     ],
   });
@@ -1221,8 +1324,11 @@ export async function init() {
     chatEpoch += 1;
     state = storage.load();
     autoBindPersona(state).catch(error => console.error('[Relationship Engine] Persona auto-bind failed.', error));
+    sceneHeadcanons = [];
     refreshPrompt();
     notify();
+    const epoch = chatEpoch;
+    prepareHeadcanons().then(() => { if (epoch === chatEpoch) refreshPrompt(); });
   });
   listen(events.MESSAGE_RECEIVED, messageIndex => {
     if (settings.autoAnalyze) enqueueAnalysis(messageIndex);
@@ -1271,10 +1377,18 @@ export async function init() {
       studio.destroy();
       widget.destroy();
       clearRelationshipPrompt(SillyTavern.getContext());
+      delete globalThis.relationshipEngineInterceptor;
       controller = null;
     },
   };
   globalThis.RelationshipEngine = controller;
+  // manifest.json → generate_interceptor: runs before SillyTavern assembles the prompt,
+  // so headcanons are picked for the scene that is about to be written.
+  globalThis.relationshipEngineInterceptor = async (chat, contextSize, abort, type) => {
+    if (type === 'quiet' || !controller) return;
+    await prepareHeadcanons(chat);
+    refreshPrompt();
+  };
   return controller;
 }
 

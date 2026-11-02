@@ -3,6 +3,7 @@
   "loading_order": 11,
   "js": "index.js",
   "css": "style.css",
+  "generate_interceptor": "relationshipEngineInterceptor",
   "author": "Anna & Hugh",
   "version": "0.2.4",
   "homePage": "https://github.com/lvslivnaya-dev/SillyTavern-Relationship-Engine",

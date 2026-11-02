@@ -197,6 +197,9 @@ function applyMutation(next, operation) {
         next.ui.triangles = (next.ui.triangles ?? []).filter(triangle =>
           triangle.centerId !== entityId && triangle.firstId !== entityId && triangle.secondId !== entityId);
         if (next.ui.strangerPairs) next.ui.strangerPairs = next.ui.strangerPairs.filter(key => !key.split('|').includes(entityId));
+        if (next.ui.headcanons) {
+          for (const key of Object.keys(next.ui.headcanons)) if (key.split('|').includes(entityId)) delete next.ui.headcanons[key];
+        }
         if (next.ui.personaId === entityId) next.ui.personaId = '';
         if (next.ui.activeRelationshipId && !next.relationships[next.ui.activeRelationshipId]) next.ui.activeRelationshipId = '';
       }

@@ -14,6 +14,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   sendMemories: true,
   sendTensions: true,
   sendFactors: true,
+  sendHeadcanons: true,
+  autoHeadcanons: false,
+  headcanonLimit: 8,
   maxPromptCharacters: 4000,
   analysisMaxCharacters: 12000,
   // Auxiliary model for the extension's own requests (see llm.js). The key of the
