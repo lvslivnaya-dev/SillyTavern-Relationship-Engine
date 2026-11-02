@@ -71,21 +71,44 @@ function sameText(left, right) {
   return normalizeText(left).toLocaleLowerCase('ru-RU') === normalizeText(right).toLocaleLowerCase('ru-RU');
 }
 
-/** Add facts, skipping empty and duplicate ones. Returns { headcanons, added }. */
+/** Add facts, skipping empty and duplicate ones. Returns { headcanons, added, ids }. */
 export function addHeadcanons(state, key, texts, { source = 'manual', messageId } = {}) {
-  let added = 0;
+  const ids = [];
   const headcanons = updateHeadcanons(state, key, entry => {
     for (const raw of texts) {
       const text = normalizeText(raw);
       if (!text || entry.items.some(item => sameText(item.text, text))) continue;
+      const id = uniqueId('headcanon');
       entry.items.push({
-        id: uniqueId('headcanon'), text, enabled: true, source, createdAt: new Date().toISOString(),
+        id, text, enabled: true, source, createdAt: new Date().toISOString(),
         ...(messageId != null ? { messageId: String(messageId) } : {}),
       });
-      added += 1;
+      ids.push(id);
     }
   });
-  return { headcanons, added };
+  return { headcanons, added: ids.length, ids };
+}
+
+/**
+ * After messages were deleted, chat indices shift. `liveIndex(id)` tells where an
+ * automatic fact's message is now (from the message markers) or null when gone.
+ */
+export function remapAutoHeadcanons(state, liveIndex) {
+  const all = clone(state.ui?.headcanons);
+  let changed = false;
+  for (const [key, entry] of Object.entries(all)) {
+    const kept = [];
+    for (const item of entry.items ?? []) {
+      if (item.source !== 'auto' || item.messageId == null) { kept.push(item); continue; }
+      const index = liveIndex(item.id);
+      if (index == null) { changed = true; continue; }
+      if (String(index) !== item.messageId) { item.messageId = String(index); changed = true; }
+      kept.push(item);
+    }
+    entry.items = kept;
+    if (!kept.length && typeof entry.auto !== 'boolean') delete all[key];
+  }
+  return { headcanons: all, changed };
 }
 
 /** Drop automatic facts created by messages that are gone or re-analyzed. */

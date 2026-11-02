@@ -13,6 +13,7 @@ import {
   headcanonPairIds,
   isAutoHeadcanons,
   listHeadcanonPairs,
+  remapAutoHeadcanons,
   selectHeadcanons,
   updateHeadcanons,
   selectRuntimePrompt,
@@ -34,7 +35,7 @@ import { AUX_PURPOSES, auxGenerate, fetchAuxModels, listAuxProfiles, routedConte
 import { triangleEdges } from './src/core/records.js';
 import { mountExtensionShell } from './src/integration/shell.js';
 import { mountMessageButtons } from './src/integration/message-buttons.js';
-import { mentionScorer, recentSceneText, semanticScorer } from './src/integration/headcanon-retrieval.js';
+import { mentionScorer, mentionedEntities, recentSceneText, semanticScorer } from './src/integration/headcanon-retrieval.js';
 import { LOCAL_MODELS, cosine, embedTexts } from './src/integration/embeddings.js';
 import { createChatStorage } from './src/integration/storage.js';
 import { createRelationshipStudio } from './src/ui/studio.js';
@@ -1095,6 +1096,7 @@ export async function init() {
       { key: 'sendTensions', label: 'Отправлять модели напряжения', type: 'checkbox' },
       { key: 'sendFactors', label: 'Отправлять модели факторы роста', type: 'checkbox' },
       { key: 'sendHeadcanons', label: 'Отправлять модели хедканоны (только подходящие к сцене)', type: 'checkbox' },
+      { key: 'autoHeadcanons', label: 'Автозаполнение хедканонов по ходу игры: анализатор добавляет новые устойчивые факты о парах, у которых включено «Авто-хедканоны»', type: 'checkbox' },
       { key: 'headcanonLimit', label: 'Сколько хедканонов к сцене, не больше (1–30)', type: 'number', min: 1, max: 30 },
       { key: 'maxPromptCharacters', label: 'Объём данных для модели, символов (800–20000; ~1 токен на 3–4 символа). Не влезает всё — уходят самые слабые линии и старые записи.', type: 'number', min: 800, max: 20000 },
     ],
@@ -1184,17 +1186,17 @@ export async function init() {
   }
 
   /** One retry when the request died because the tab was hidden mid-flight. */
-  async function analyzeWithResume(ctx, sourceState, message, loreContext) {
+  async function analyzeWithResume(ctx, sourceState, message, loreContext, options = {}) {
     let hiddenDuringRequest = false;
     const markHidden = () => { if (isPageHidden()) hiddenDuringRequest = true; };
     document.addEventListener('visibilitychange', markHidden);
     try {
-      return await analyzeMessage(routedContext(ctx, settings, 'analysis'), sourceState, message, settings, loreContext);
+      return await analyzeMessage(routedContext(ctx, settings, 'analysis'), sourceState, message, settings, loreContext, options);
     } catch (error) {
       if (!hiddenDuringRequest) throw error;
       logEvent('warn', 'Запрос анализа прервался, пока вкладка была скрыта — повторяю', error);
       await waitUntilVisible();
-      return analyzeMessage(routedContext(ctx, settings, 'analysis'), sourceState, message, settings, loreContext);
+      return analyzeMessage(routedContext(ctx, settings, 'analysis'), sourceState, message, settings, loreContext, options);
     } finally {
       document.removeEventListener('visibilitychange', markHidden);
     }
@@ -1260,7 +1262,8 @@ export async function init() {
     const loreContext = await loadLinkedLore(ctx, sourceState);
     if (expectedEpoch !== chatEpoch) return skip('чат сменился');
     logEvent('info', `${label}: анализ начат${force ? ' (вручную)' : ''}`);
-    const result = await analyzeWithResume(ctx, sourceState, message, loreContext);
+    const headcanonKeys = autoHeadcanonKeys(sourceState, message.mes);
+    const result = await analyzeWithResume(ctx, sourceState, message, loreContext, { headcanonPairs: headcanonKeys });
     // Analysis yields relative deltas, so a newer state (a moved slider, a selected
     // pair) is fine to apply them to. Only a different chat or message text is stale.
     const isStale = () => expectedEpoch !== chatEpoch || SillyTavern.getContext().getCurrentChatId() !== sourceChatId
@@ -1277,26 +1280,55 @@ export async function init() {
     const transactionId = `message:${messageIndex}:${textHash}`;
     let next = state.operations.some(operation => operation.messageId === String(messageIndex))
       ? rollbackMessage(state, String(messageIndex)) : state;
+    // Re-analysis replaces this message's automatic headcanons too.
+    next = withoutAutoHeadcanons(next, String(messageIndex));
     const allowNewPair = await confirmNewPairs(next, result, acceptedNewCharacters);
     if (!allowNewPair) return skip('анализ отменён');
     if (isStale()) return skip('чат или текст сообщения изменились');
     const applied = applyAnalysisResult(next, result, { transactionId, messageId: String(messageIndex), messageIndex }, acceptedNewCharacters,
-      { linkedScales: settings.linkedScales !== false, allowNewPair });
+      { linkedScales: settings.linkedScales !== false, allowNewPair, headcanonKeys });
     next = applied.state;
     const operations = applied.operations;
-    if (!operations.length) return skip('модель не нашла изменений в отношениях');
+    const headcanonIds = [];
+    for (const { key, text } of applied.headcanons ?? []) {
+      const added = addHeadcanons(next, key, [text], { source: 'auto', messageId: messageIndex });
+      next = { ...next, ui: { ...next.ui, headcanons: added.headcanons } };
+      headcanonIds.push(...added.ids);
+    }
+    if (!operations.length && !headcanonIds.length) return skip('модель не нашла изменений в отношениях');
     message.extra ??= {};
     message.extra[MESSAGE_EXTRA_KEY] = {
       fingerprint: textHash,
       transactionId,
       operationIds: operations.map(operation => operation.id),
+      ...(headcanonIds.length ? { headcanonIds } : {}),
       analyzedAt: new Date().toISOString(),
     };
     await commit(next, true);
-    logEvent('info', `${label}: применено изменений — ${operations.length}, состояние сохранено`);
+    if (headcanonIds.length) { await prepareHeadcanons(); refreshPrompt(); }
+    logEvent('info', `${label}: применено изменений — ${operations.length}${headcanonIds.length ? `, новых хедканонов — ${headcanonIds.length}` : ''}, состояние сохранено`);
     if (isGenerationActive()) await waitForGenerationEnd();
     await SillyTavern.getContext().saveChat();
-    return { applied: operations.length };
+    return { applied: operations.length + headcanonIds.length };
+  }
+
+  /** Pairs whose automatic headcanons the analyzer may extend: auto on, both members in the reply. */
+  function autoHeadcanonKeys(targetState, text) {
+    if (!settings.autoHeadcanons) return [];
+    const present = [...mentionedEntities(targetState, text)];
+    const keys = [];
+    for (let left = 0; left < present.length; left += 1) {
+      for (let right = left + 1; right < present.length; right += 1) {
+        const key = headcanonKey(present[left], present[right]);
+        if (isAutoHeadcanons(targetState, key)) keys.push(key);
+      }
+    }
+    return keys.slice(0, 12);
+  }
+
+  function withoutAutoHeadcanons(targetState, messageId) {
+    const { headcanons, dropped } = dropAutoHeadcanons(targetState, id => id === messageId);
+    return dropped ? { ...targetState, ui: { ...targetState.ui, headcanons } } : targetState;
   }
 
   /**
@@ -1374,10 +1406,14 @@ export async function init() {
     if (expectedEpoch !== chatEpoch || current.getCurrentChatId() !== expectedChatId) return;
     const chat = current.chat ?? [];
     const liveOperations = new Map();
+    const liveHeadcanons = new Map();
     chat.forEach((message, index) => {
       const marker = message.extra?.[MESSAGE_EXTRA_KEY];
       for (const operationId of marker?.operationIds ?? []) liveOperations.set(operationId, index);
+      for (const headcanonId of marker?.headcanonIds ?? []) liveHeadcanons.set(headcanonId, index);
     });
+    // Automatic headcanons follow their message to its new index, or leave with it.
+    const remapped = remapAutoHeadcanons(state, id => liveHeadcanons.get(id) ?? null);
     const kept = state.operations
       .filter(operation => !operation.messageId || liveOperations.has(operation.id))
       .map(operation => {
@@ -1386,17 +1422,21 @@ export async function init() {
         return { ...operation, messageId: String(index), messageIndex: index };
       });
     if (kept.length === state.operations.length
-      && kept.every((operation, index) => operation.messageIndex === state.operations[index].messageIndex)) return;
+      && kept.every((operation, index) => operation.messageIndex === state.operations[index].messageIndex)) {
+      if (remapped.changed) await commitHeadcanons(remapped.headcanons);
+      return;
+    }
     let next = createDefaultState({ scales: state.config.scales });
     next.baseline = structuredClone(state.baseline);
     next.entities = structuredClone(state.baseline.entities ?? {});
     next.relationships = structuredClone(state.baseline.relationships ?? {});
     next.records = structuredClone(state.baseline.records ?? { memories: [], tensions: [] });
     next.snapshots = structuredClone(state.snapshots ?? []);
-    next.ui = structuredClone(state.ui ?? { activeRelationshipId: '' });
+    next.ui = { ...structuredClone(state.ui ?? { activeRelationshipId: '' }), headcanons: remapped.headcanons };
     next = applyOperations(next, kept);
     if (expectedEpoch !== chatEpoch || SillyTavern.getContext().getCurrentChatId() !== expectedChatId) return;
     await commit(next, true);
+    if (remapped.changed) { await prepareHeadcanons(); refreshPrompt(); }
   }
 
   const events = context.eventTypes ?? context.event_types;
@@ -1418,9 +1458,9 @@ export async function init() {
     const expectedEpoch = chatEpoch;
     analysisQueue = analysisQueue.then(async () => {
       if (expectedEpoch !== chatEpoch || SillyTavern.getContext().getCurrentChatId() !== expectedChatId) return;
-      if (state.operations.some(operation => operation.messageId === String(messageIndex))) {
-        await commit(rollbackMessage(state, String(messageIndex)), true);
-      }
+      const hasOperations = state.operations.some(operation => operation.messageId === String(messageIndex));
+      const withoutHeads = withoutAutoHeadcanons(hasOperations ? rollbackMessage(state, String(messageIndex)) : state, String(messageIndex));
+      if (hasOperations || withoutHeads !== state) await commit(withoutHeads, true);
       if (settings.autoAnalyze) await processMessage(Number(messageIndex), true, expectedChatId, expectedEpoch);
     }).catch(error => console.error('[Relationship Engine] Edited message processing failed.', error));
   });

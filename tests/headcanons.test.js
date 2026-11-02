@@ -100,3 +100,26 @@ test('semantic ranking: meaning wins, presence only nudges, threshold cuts', asy
   assert.equal(lines[0], 'headcanon[Анна & Леон]: Близкий по смыслу', 'смысл важнее присутствия');
   assert.equal(selectHeadcanons(state, { score: semanticScorer(state, '', similarity, 0.82) }).length, 1, 'порог отсекает далёкие');
 });
+
+test('automatic headcanons: only allowed pairs, resolved by scene names, follow deleted messages', async () => {
+  const { applyAnalysisResult } = await import('../src/integration/analysis-operations.js');
+  const { parseAnalysis } = await import('../src/integration/analyzer.js');
+  const { remapAutoHeadcanons } = await import('../src/core/index.js');
+  const state = setup();
+  const result = parseAnalysis(JSON.stringify({ operations: [], headcanons: [
+    { participantIds: ['Анна', 'p'], text: 'Анна всегда приносит Еве кофе' },
+    { participantIds: ['a', 'b'], text: 'Пара без автозаполнения' },
+    { participantIds: ['a'], text: 'Неполная пара' },
+  ] }));
+  assert.equal(result.headcanons.length, 2, 'неполная пара отброшена при разборе');
+  const applied = applyAnalysisResult(state, result, { messageId: '5' }, [], { headcanonKeys: [headcanonKey('a', 'p')] });
+  assert.deepEqual(applied.headcanons, [{ key: headcanonKey('a', 'p'), text: 'Анна всегда приносит Еве кофе' }]);
+
+  const added = addHeadcanons(state, headcanonKey('a', 'p'), ['Анна всегда приносит Еве кофе'], { source: 'auto', messageId: 5 });
+  state.ui.headcanons = added.headcanons;
+  const moved = remapAutoHeadcanons(state, id => (id === added.ids[0] ? 3 : null));
+  assert.equal(moved.changed, true);
+  assert.equal(moved.headcanons[headcanonKey('a', 'p')].items[0].messageId, '3', 'сдвинулся вместе с сообщением');
+  const gone = remapAutoHeadcanons(state, () => null);
+  assert.equal(gone.headcanons[headcanonKey('a', 'p')], undefined, 'удалён вместе с сообщением');
+});

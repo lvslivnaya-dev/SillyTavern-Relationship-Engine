@@ -147,5 +147,14 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
       add(type, { relationshipId: id, item: { id: uniqueId(collection), text: item.text, intensity: item.intensity, createdAt: new Date().toISOString(), source: 'chat-analysis' } }, item.text);
     }
   }
-  return { state: next, operations };
+  // Automatic headcanons: only for the pairs the caller allowed (options.headcanonKeys).
+  const allowedHeadcanons = new Set(options.headcanonKeys ?? []);
+  const headcanons = [];
+  for (const item of result.headcanons ?? []) {
+    const ids = [...new Set(item.participantIds.map(resolveId).filter(Boolean))];
+    if (ids.length !== 2) continue;
+    const key = [...ids].sort().join('|');
+    if (allowedHeadcanons.has(key)) headcanons.push({ key, text: item.text });
+  }
+  return { state: next, operations, headcanons };
 }
