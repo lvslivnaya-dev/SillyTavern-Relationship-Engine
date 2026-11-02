@@ -34,6 +34,7 @@ export function createRelationshipStudio(options = {}) {
   const folds = { characters: false, personaLines: true, characterLines: false, allLines: true, newMemory: false, newTension: false };
   let scaleEditorPairId = null; // overview card whose scale checklist is open
   let editingRecordId = null; // memory/tension shown as an inline editor
+  let selectedPairs = new Set(); // overview lines ticked for bulk removal
   const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
 
   const style = element('style', { text: STYLE + `
@@ -79,6 +80,13 @@ export function createRelationshipStudio(options = {}) {
     .pair-swap:disabled{opacity:.4;cursor:default}
     .pair-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:14px}
     .pair-card-head h3{margin:0;min-width:0;overflow-wrap:anywhere}
+    .pair-title{display:flex;align-items:flex-start;gap:8px;min-width:0;cursor:pointer}
+    .pair-title input{width:15px;height:15px;margin:2px 0 0;flex:0 0 auto}
+    .relationship-card.selected{border-color:var(--rs-danger)}
+    .fold-actions{margin-left:auto;display:flex;align-items:center}
+    .bulk-trash{width:auto;min-width:40px;min-height:34px;padding:4px 10px;font-size:15px}
+    .bulk-trash:not(:disabled):hover{border-color:var(--rs-danger);color:var(--rs-danger)}
+    .bulk-trash:disabled{opacity:.4;cursor:default}
     .strangers-toggle{display:flex;align-items:center;gap:6px;flex:0 0 auto;font-size:12px;color:var(--rs-muted);cursor:pointer;white-space:nowrap}
     .strangers-toggle input{width:14px;height:14px;margin:0}
     .tselect{position:relative;min-width:0}
@@ -590,14 +598,36 @@ export function createRelationshipStudio(options = {}) {
     return content;
   }
 
-  function fold(key, title, note, body) {
+  function fold(key, title, note, body, actions = null) {
     const details = element('details', { className: 'fold' });
     details.open = folds[key];
     details.addEventListener('toggle', () => { folds[key] = details.open; });
     const summary = element('summary', { text: title });
     if (note) summary.append(element('span', { className: 'muted', text: note }));
+    if (actions) summary.append(element('span', { className: 'fold-actions' }, [actions]));
     details.append(summary, element('div', { className: 'fold-body' }, [body]));
     return details;
+  }
+
+  /** Trash button in a section header: removes the selected lines of that section. */
+  function bulkRemoveButton(pairs) {
+    const ids = pairs.map(pair => pairId(pair)).filter(id => selectedPairs.has(id));
+    const trash = button(ids.length ? `🗑 ${ids.length}` : '🗑', 'icon bulk-trash', async event => {
+      // The button sits inside <summary>: keep the click from folding the section.
+      event.preventDefault();
+      event.stopPropagation();
+      if (!ids.length) return;
+      try {
+        const removed = await facade.invoke('onRemovePairsBulk', { relationshipIds: ids });
+        if (removed) {
+          for (const id of ids) selectedPairs.delete(id);
+          setStatus(`Удалено линий: ${ids.length}`);
+          render();
+        }
+      } catch (error) { setStatus(error?.message || 'Не удалось удалить линии', true); }
+    }, ids.length ? `Удалить выбранные линии: ${ids.length}` : 'Отметьте линии галочкой, чтобы удалить их');
+    trash.disabled = !ids.length;
+    return trash;
   }
 
   function renderAllRelationships() {
@@ -609,18 +639,20 @@ export function createRelationshipStudio(options = {}) {
       container.append(element('p', { className: 'empty', text: 'Пока нет связей: выберите пару в левой панели или запустите анализ истории.' }));
       return container;
     }
+    // Forget selections of lines that no longer exist.
+    selectedPairs = new Set([...selectedPairs].filter(id => pairs.some(pair => pairId(pair) === id)));
     const personaId = snapshot.personaId || snapshot.ui?.personaId || '';
     if (!personaId) {
-      container.append(fold('allLines', 'Линии отношений', `· ${pairs.length}`, renderPairCards(pairs)));
+      container.append(fold('allLines', 'Линии отношений', `· ${pairs.length}`, renderPairCards(pairs), bulkRemoveButton(pairs)));
       return container;
     }
     const withPersona = pairs.filter(pair => pairTarget(pair) === personaId);
     const between = pairs.filter(pair => pairTarget(pair) !== personaId);
     container.append(
       fold('personaLines', 'Линии с персоной', `· ${withPersona.length}`, withPersona.length
-        ? renderPairCards(withPersona) : element('p', { className: 'empty', text: 'Пока никто не испытывает чувств к персоне.' })),
+        ? renderPairCards(withPersona) : element('p', { className: 'empty', text: 'Пока никто не испытывает чувств к персоне.' }), bulkRemoveButton(withPersona)),
       fold('characterLines', 'Линии между персонажами', `· ${between.length}`, between.length
-        ? renderPairCards(between) : element('p', { className: 'empty', text: 'Линий между персонажами пока нет.' })),
+        ? renderPairCards(between) : element('p', { className: 'empty', text: 'Линий между персонажами пока нет.' }), bulkRemoveButton(between)),
     );
     return container;
   }
@@ -635,8 +667,17 @@ export function createRelationshipStudio(options = {}) {
       const strangersInput = element('input', { type: 'checkbox', checked: (snapshot.ui?.strangerPairs ?? []).includes(strangerKey) });
       strangersInput.addEventListener('change', () => act('onToggleStrangers', { relationshipId: pairId(pair), strangers: strangersInput.checked }, 'strangers-toggle'));
       const strangers = element('label', { className: 'strangers-toggle', title: 'Модель будет помнить, что они ещё не представлены друг другу и не знают имён. Действует в обе стороны. Снимите после знакомства.' }, [strangersInput, 'Незнакомы']);
-      const card = element('article', { className: 'card relationship-card' }, [
-        element('div', { className: 'pair-card-head' }, [element('h3', { text: pairLabel(snapshot, pair) }), strangers]),
+      const isSelected = selectedPairs.has(pairId(pair));
+      const selectInput = element('input', { type: 'checkbox', checked: isSelected, className: 'pair-select', 'aria-label': `Выбрать линию ${pairLabel(snapshot, pair)}` });
+      selectInput.addEventListener('change', () => {
+        if (selectInput.checked) selectedPairs.add(pairId(pair)); else selectedPairs.delete(pairId(pair));
+        render();
+      });
+      const card = element('article', { className: `card relationship-card${isSelected ? ' selected' : ''}` }, [
+        element('div', { className: 'pair-card-head' }, [
+          element('label', { className: 'pair-title', title: 'Отметить для удаления' }, [selectInput, element('h3', { text: pairLabel(snapshot, pair) })]),
+          strangers,
+        ]),
         editingScales ? renderScaleEditor(pair) : renderOverview(pair),
         element('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--rs-line, #303a49)' } }, [
           button('Факторы роста', 'btn', () => openFactors(pairId(pair))),

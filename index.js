@@ -697,12 +697,28 @@ export async function init() {
       if (!state.relationships[id]) return;
       const confirmed = await context.Popup.show.confirm(
         'Удалить линию отношений',
-        `Линия «${state.entities[sourceId].name} → ${state.entities[targetId].name}» и её шкалы, воспоминания и напряжения будут удалены. Продолжить?`,
+        `Линия «${escapeHtml(state.entities[sourceId].name)} → ${escapeHtml(state.entities[targetId].name)}» и её шкалы, воспоминания и напряжения будут удалены. Продолжить?`,
       );
       if (confirmed !== context.POPUP_RESULT.AFFIRMATIVE) return;
       await commit(applyOperation(state, createOperation('relationship.remove', {
         relationshipId: id, from: sourceId, to: targetId,
       }, { transactionId: uniqueId('manual'), reason: 'Ручное удаление линии', timestamp: new Date().toISOString() })), true);
+    },
+    onRemovePairsBulk: async ({ relationshipIds }) => {
+      const lines = [...new Set(relationshipIds ?? [])].map(id => state.relationships[id]).filter(Boolean);
+      if (!lines.length) return false;
+      const nameOf = id => escapeHtml(state.entities[id]?.name ?? id);
+      const items = lines.map(relation => `<li>${nameOf(relation.from)} → ${nameOf(relation.to)}</li>`).join('');
+      const confirmed = await context.Popup.show.confirm(
+        `Удалить линии: ${lines.length}`,
+        `<ul style="text-align:left;margin:0;padding-left:18px">${items}</ul><p>Шкалы, воспоминания и напряжения этих линий будут удалены. Продолжить?</p>`,
+      );
+      if (confirmed !== context.POPUP_RESULT.AFFIRMATIVE) return false;
+      const meta = { transactionId: uniqueId('manual'), reason: 'Ручное удаление линий', timestamp: new Date().toISOString() };
+      await commit(applyOperations(state, lines.map(relation => createOperation('relationship.remove', {
+        relationshipId: relation.id, from: relation.from, to: relation.to,
+      }, meta))), true);
+      return true;
     },
     onRemoveCharacter: async ({ characterId: id }) => {
       const entity = state.entities[id];
