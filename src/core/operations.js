@@ -5,7 +5,7 @@ import { createDefaultState, createEntity, createRelationship, getScale } from '
 const TYPES = new Set([
   'entity.upsert', 'entity.remove', 'relationship.upsert', 'relationship.remove',
   'scale.delta', 'scale.set', 'factors.set', 'record.toggle',
-  'memory.add', 'memory.remove', 'tension.add', 'tension.remove', 'stage.set', 'scales.hide',
+  'memory.add', 'memory.remove', 'tension.add', 'tension.remove', 'stage.set', 'scales.hide', 'record.update',
 ]);
 
 /** Normalize and bound a growth-factor list: { scaleId, direction: up|down, text }. */
@@ -112,6 +112,30 @@ function applyMutation(next, operation) {
       const key = payload.kind === 'tension' ? 'tensions' : 'memories';
       const item = relation[key].find((candidate) => candidate.id === payload.itemId);
       if (item) item.disabled = Boolean(payload.disabled);
+      break;
+    }
+    case 'record.update': {
+      // A record removed by a rolled-back message makes its later edit a no-op.
+      const owner = payload.shared ? next.records : next.relationships[payload.relationshipId];
+      const key = payload.kind === 'tension' ? 'tensions' : 'memories';
+      const item = owner?.[key]?.find(candidate => candidate.id === payload.itemId);
+      if (!item) break;
+      const changes = payload.changes ?? {};
+      if (changes.text != null) {
+        const text = String(changes.text).trim();
+        if (!text) throw new TypeError('Record text is required');
+        item.text = text.slice(0, 1000);
+      }
+      if (changes.intensity != null) item.intensity = Math.max(1, Math.min(5, Math.round(Number(changes.intensity)) || 3));
+      for (const field of ['participantIds', 'knownBy']) {
+        if (changes[field] == null) continue;
+        if (!payload.shared) throw new TypeError(`${field} can only be edited on shared records`);
+        const ids = [...new Set(changes[field].map(String))];
+        if (ids.some(id => !next.entities[id])) throw new RangeError('Unknown record participant');
+        item[field] = ids.sort();
+      }
+      // Participants always know about their own event.
+      if (payload.shared && item.knownBy) item.knownBy = [...new Set([...item.knownBy, ...(item.participantIds ?? [])])].sort();
       break;
     }
     case 'factors.set': {

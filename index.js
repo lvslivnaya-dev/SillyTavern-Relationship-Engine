@@ -623,6 +623,39 @@ export async function init() {
         shared: Boolean(shared), relationshipId, itemId,
       }, { transactionId: uniqueId('manual'), reason: 'Ручное удаление записи', timestamp: new Date().toISOString() })), true);
     },
+    onUpdateRecord: async ({ kind, shared, relationshipId: pairRecordOwner, itemId, changes }) => {
+      const meta = { transactionId: uniqueId('manual'), reason: 'Правка записи', timestamp: new Date().toISOString() };
+      const key = kind === 'tension' ? 'tensions' : 'memories';
+      if (shared) {
+        await commit(applyOperation(state, createOperation('record.update', { kind, shared: true, itemId, changes }, meta)), true);
+        return;
+      }
+      const relation = state.relationships[pairRecordOwner];
+      const original = relation?.[key]?.find(item => item.id === itemId);
+      if (!original) throw new Error('Запись не найдена.');
+      const pairParticipants = [relation.from, relation.to].sort();
+      const sameParticipants = !changes.participantIds
+        || JSON.stringify([...changes.participantIds].sort()) === JSON.stringify(pairParticipants);
+      if (sameParticipants && !changes.knownBy) {
+        await commit(applyOperation(state, createOperation('record.update', { kind, relationshipId: pairRecordOwner, itemId, changes }, meta)), true);
+        return;
+      }
+      // Old pair-bound records have fixed participants: editing them moves the record into shared ones.
+      const participantIds = [...new Set(changes.participantIds ?? pairParticipants)].sort();
+      const knownBy = [...new Set([...(changes.knownBy ?? participantIds), ...participantIds])].sort();
+      const moved = {
+        ...original,
+        id: uniqueId(kind),
+        text: String(changes.text ?? original.text).trim(),
+        intensity: changes.intensity ?? original.intensity,
+        participantIds,
+        knownBy,
+      };
+      await commit(applyOperations(state, [
+        createOperation(kind === 'tension' ? 'tension.remove' : 'memory.remove', { relationshipId: pairRecordOwner, itemId }, meta),
+        createOperation(kind === 'tension' ? 'tension.add' : 'memory.add', { shared: true, item: moved }, meta),
+      ]), true);
+    },
     onToggleRecord: async ({ kind, shared, relationshipId, itemId, disabled }) => {
       await commit(applyOperation(state, createOperation('record.toggle', {
         kind, shared: Boolean(shared), relationshipId, itemId, disabled: Boolean(disabled),

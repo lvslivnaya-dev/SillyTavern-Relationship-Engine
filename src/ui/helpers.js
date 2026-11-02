@@ -36,6 +36,72 @@ export function button(label, className, onClick, title = label) {
   return node;
 }
 
+/**
+ * Dropdown drawn by the extension itself: a native <select> popup cannot be
+ * themed (colors, scrollbar), this one inherits the Studio's theme variables.
+ * options: [{ value, label }]; onChange(value) fires only on a real change.
+ */
+export function themedSelect({ options, value = '', onChange, label = '' }) {
+  const root = element('div', { className: 'tselect' });
+  const trigger = element('button', { type: 'button', className: 'tselect-trigger', 'aria-haspopup': 'listbox', 'aria-expanded': 'false', 'aria-label': label });
+  const list = element('div', { className: 'tselect-list', role: 'listbox', hidden: true });
+  let selected = options.some(option => option.value === value) ? value : options[0]?.value ?? '';
+  const optionButtons = options.map(option => {
+    const node = element('button', { type: 'button', className: 'tselect-option', role: 'option', text: option.label, title: option.label });
+    node.dataset.value = option.value;
+    node.addEventListener('click', () => choose(option.value));
+    return node;
+  });
+  list.append(...optionButtons);
+  root.append(trigger, list);
+
+  function paint() {
+    trigger.textContent = options.find(option => option.value === selected)?.label ?? '';
+    for (const node of optionButtons) node.setAttribute('aria-selected', String(node.dataset.value === selected));
+  }
+  function onOutside(event) {
+    if (!event.composedPath().includes(root)) close();
+  }
+  function open() {
+    list.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    root.getRootNode().addEventListener('pointerdown', onOutside, true);
+    (optionButtons.find(node => node.dataset.value === selected) ?? optionButtons[0])?.focus({ preventScroll: false });
+  }
+  function close(focusTrigger = false) {
+    if (list.hidden) return;
+    list.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+    root.getRootNode().removeEventListener('pointerdown', onOutside, true);
+    if (focusTrigger) trigger.focus();
+  }
+  function choose(next) {
+    close(true);
+    if (next === selected) return;
+    selected = next;
+    paint();
+    try { onChange?.(next); } catch (error) { console.error('[Relationship Engine] Dropdown handler failed.', error); }
+  }
+  trigger.addEventListener('click', () => (list.hidden ? open() : close()));
+  root.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !list.hidden) {
+      // Keep Escape from also closing the whole Studio.
+      event.stopPropagation();
+      event.preventDefault();
+      close(true);
+      return;
+    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    if (list.hidden) { open(); return; }
+    const index = optionButtons.indexOf(root.getRootNode().activeElement);
+    const step = event.key === 'ArrowDown' ? 1 : -1;
+    optionButtons[(index + step + optionButtons.length) % optionButtons.length]?.focus();
+  });
+  paint();
+  return root;
+}
+
 export function clamp(value, min, max) {
   return Math.min(Math.max(Number(value) || 0, min), max);
 }

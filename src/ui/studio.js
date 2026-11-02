@@ -1,6 +1,7 @@
 ﻿import {
   button, characterId, characterName, clamp, createFacade, dispatch, downloadJson, element,
   ensureContainer, formatTime, getPair, metricDefinitions, visibleMetricDefinitions, nextControlId, normalizeSnapshot, pairId, pairLabel, pairSource, pairTarget,
+  themedSelect,
 } from './helpers.js';
 import { collectRecords, filterRecords, triangleEdges } from '../core/records.js';
 
@@ -30,8 +31,9 @@ export function createRelationshipStudio(options = {}) {
   let selectedForRemoval = new Set();
   let toolsOpen = false; // phone only: persona/pair block is collapsible
   // Overview sections; character-to-character lines start collapsed to keep the screen clean.
-  const folds = { characters: false, personaLines: true, characterLines: false, allLines: true };
+  const folds = { characters: false, personaLines: true, characterLines: false, allLines: true, newMemory: false, newTension: false };
   let scaleEditorPairId = null; // overview card whose scale checklist is open
+  let editingRecordId = null; // memory/tension shown as an inline editor
   const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
 
   const style = element('style', { text: STYLE + `
@@ -75,6 +77,39 @@ export function createRelationshipStudio(options = {}) {
     .relationship-card>details>summary{cursor:pointer;font-weight:600;margin-bottom:6px}
     .pair-swap{justify-self:center;display:grid;place-items:center;width:30px;height:30px;min-height:30px;padding:0;font-size:15px;line-height:1;border-radius:8px}
     .pair-swap:disabled{opacity:.4;cursor:default}
+    .tselect{position:relative;min-width:0}
+    .tselect-trigger{width:100%;min-height:40px;display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;padding:8px 10px;border:1px solid var(--rs-line);border-radius:8px;background:color-mix(in srgb,var(--rs-inset) 70%,var(--rs-bg));color:var(--rs-text);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .tselect-trigger::after{content:'▾';flex:0 0 auto;color:var(--rs-muted)}
+    .tselect-trigger[aria-expanded=true],.tselect-trigger:focus-visible{border-color:var(--rs-accent);outline:none}
+    .tselect-list{position:absolute;z-index:20;left:0;right:0;top:calc(100% + 4px);max-height:260px;overflow-y:auto;overscroll-behavior:contain;padding:4px;border:1px solid var(--rs-accent);border-radius:9px;background:var(--rs-bg);box-shadow:0 12px 32px #0009}
+    .tselect-list[hidden]{display:none}
+    .tselect-option{display:block;width:100%;text-align:left;padding:8px 10px;border:0;border-radius:6px;background:transparent;color:var(--rs-text);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .tselect-option:hover,.tselect-option:focus-visible{background:color-mix(in srgb,var(--rs-panel) 70%,var(--rs-accent));outline:none}
+    .tselect-option[aria-selected=true]{color:var(--rs-accent);font-weight:700}
+    .records-view{display:grid;gap:16px}
+    .record-form{display:grid;gap:10px}
+    .record-list-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px}
+    .record-list-head h3{margin:0}
+    .record-filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:10px;margin-bottom:14px}
+    .record-list{display:grid;gap:10px}
+    .record{border:1px solid var(--rs-line);border-left:3px solid var(--rs-accent);border-radius:10px;padding:12px 14px;background:color-mix(in srgb,var(--rs-inset) 80%,var(--rs-bg));display:grid;gap:8px}
+    .record.off{opacity:.5;border-left-color:var(--rs-line)}
+    .record.editing{border-left-color:var(--rs-accent);background:var(--rs-panel)}
+    .record-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    .record-head time{margin-left:auto;color:var(--rs-muted);font-size:11px}
+    .record-intensity{color:var(--rs-accent);letter-spacing:2px;font-size:12px}
+    .record-badge{font-size:11px;padding:1px 8px;border:1px solid var(--rs-line);border-radius:999px;color:var(--rs-muted)}
+    .record-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.45}
+    .record-people{display:flex;flex-wrap:wrap;gap:6px}
+    .record-people .chip{font-size:11px;padding:2px 9px;border-radius:999px;background:color-mix(in srgb,var(--rs-panel) 80%,var(--rs-accent));border:1px solid var(--rs-line)}
+    .record-secret{margin:0;font-size:11px;color:var(--rs-accent)}
+    .record-actions{display:flex;gap:6px;flex-wrap:wrap}
+    .record-actions .btn{min-height:30px;padding:4px 10px;font-size:12px}
+    .roster{border:1px solid var(--rs-line);border-radius:8px;padding:8px 10px}
+    .roster-legend{font-size:11px;margin:0 0 6px}
+    .roster-list{max-height:150px;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,170px),1fr));gap:4px;padding-right:4px}
+    .roster-item{display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;padding:2px 0;min-width:0}
+    .roster-item input{width:14px;height:14px;flex:0 0 auto;margin:0}
     .scale-editor-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px}
     .scale-editor-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--rs-line);border-radius:8px;cursor:pointer;font-size:13px}
     .scale-editor-item input{width:14px;height:14px;margin:0;flex:0 0 auto}
@@ -689,107 +724,176 @@ export function createRelationshipStudio(options = {}) {
     return element('div', { className: 'grid' }, [metrics]);
   }
 
-  function renderCollection(pair, type) {
-    const singular = type === 'memories' ? 'воспоминание' : 'напряжение';
-    const form = element('form', { className: 'card' });
-    const text = element('textarea', { placeholder: `Опишите ${singular}…`, required: true, 'aria-label': `Текст: ${singular}` });
-    const intensity = element('input', { id: nextControlId('rs-intensity'), type: 'range', min: 1, max: 5, value: 3, 'aria-label': 'Интенсивность' });
-    const submit = button(`Добавить: ${singular}`, 'btn primary', () => {});
-    const makeRoster = (legendText) => {
-      const box = element('div', { style: { border: '1px solid var(--rs-line, #303a49)', borderRadius: '8px', padding: '8px 10px', margin: '10px 0' } });
-      box.append(element('p', { className: 'muted', style: { fontSize: '11px', margin: '0 0 6px' }, text: legendText }));
-      const list = element('div', { style: { maxHeight: '150px', overflowY: 'auto', display: 'grid', gap: '4px', paddingRight: '4px' } });
-      for (const character of snapshot.characters || []) {
-        const input = element('input', { type: 'checkbox', value: characterId(character) });
-        input.style.cssText = 'width:14px;height:14px;flex:0 0 auto;accent-color:var(--rs-accent,#e6ad55);margin:0';
-        list.append(element('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', margin: '0', cursor: 'pointer', padding: '2px 0' } }, [input, characterName(character)]));
-      }
-      box.append(list);
-      return { box, list };
-    };
-    const participants = makeRoster('Участники записи (никто не выбран — общая для чата)');
-    const knownBy = makeRoster('Кому известно (пусто — только участникам; остальные не должны упоминать это)');
-    participants.list.addEventListener('change', () => {
-      const selected = [...participants.list.querySelectorAll('input:checked')].map(input => input.value);
+  function nameOf(id) {
+    return characterName((snapshot.characters || []).find(character => characterId(character) === id), id);
+  }
+
+  /** Checkbox list of characters; `locked` ids are checked and disabled (participants always know). */
+  function makeRoster(legendText, selectedIds = []) {
+    const box = element('div', { className: 'roster' });
+    box.append(element('p', { className: 'muted roster-legend', text: legendText }));
+    const list = element('div', { className: 'roster-list' });
+    for (const character of snapshot.characters || []) {
+      const input = element('input', { type: 'checkbox', value: characterId(character), checked: selectedIds.includes(characterId(character)) });
+      list.append(element('label', { className: 'roster-item' }, [input, characterName(character)]));
+    }
+    box.append(list);
+    const checked = () => [...list.querySelectorAll('input:checked')].map(input => input.value);
+    return { box, list, checked };
+  }
+
+  /** Keep "who knows" consistent with participants: participants are checked and locked. */
+  function linkRosters(participants, knownBy) {
+    const sync = () => {
+      const selected = participants.checked();
       for (const input of knownBy.list.querySelectorAll('input')) {
         if (selected.includes(input.value)) { input.checked = true; input.disabled = true; }
-        else { input.disabled = false; }
+        else input.disabled = false;
       }
+    };
+    participants.list.addEventListener('change', sync);
+    sync();
+  }
+
+  function intensityControl(value = 3) {
+    const input = element('input', { id: nextControlId('rs-intensity'), type: 'range', min: 1, max: 5, value, 'aria-label': 'Интенсивность' });
+    const output = element('output', { text: String(value) });
+    input.addEventListener('input', () => { output.textContent = input.value; });
+    const row = element('div', { className: 'metric' }, [element('label', { text: 'Интенсивность', htmlFor: input.id }), input, output]);
+    row.append(element('p', { className: 'muted', style: { fontSize: '11px', margin: '2px 0 0', gridColumn: '1 / -1' }, text: '1 — фон, почти не влияет; 3 — заметно; 5 — определяет поведение' }));
+    return { input, row };
+  }
+
+  function renderCollection(pair, type) {
+    const singular = type === 'memories' ? 'воспоминание' : 'напряжение';
+    const all = collectRecords(snapshot, type);
+
+    // Filters: one dropdown for a character, one for a line that actually has records of this kind.
+    const characterOptions = [{ value: '', label: 'Все персонажи' }, ...(snapshot.characters || []).map(character => ({ value: characterId(character), label: characterName(character) }))];
+    const lines = (snapshot.pairs || []).filter(relation => filterRecords(all, { relationshipId: pairId(relation), pairIds: [pairSource(relation), pairTarget(relation)] }).length);
+    const lineOptions = [{ value: '', label: 'Все линии' }, ...lines.map(relation => ({ value: pairId(relation), label: pairLabel(snapshot, relation) }))];
+    if (recordFilter.relationshipId && !lines.some(relation => pairId(relation) === recordFilter.relationshipId)) {
+      recordFilter = { characterId: recordFilter.characterId };
+    }
+    const characterFilter = themedSelect({
+      options: characterOptions, value: recordFilter.characterId || '', label: 'Фильтр по персонажу',
+      onChange: value => { recordFilter = { ...recordFilter, characterId: value || undefined }; render(); },
     });
-    submit.type = 'submit';
-    const intensityRow = element('div', { className: 'metric' }, [
-      element('label', { text: 'Интенсивность', htmlFor: intensity.id }), intensity, element('output', { text: '3' }),
+    const lineFilter = themedSelect({
+      options: lineOptions, value: recordFilter.relationshipId || '', label: 'Фильтр по линии',
+      onChange: value => {
+        const relation = lines.find(item => pairId(item) === value);
+        recordFilter = { characterId: recordFilter.characterId, ...(relation ? { relationshipId: value, pairIds: [pairSource(relation), pairTarget(relation)] } : {}) };
+        render();
+      },
+    });
+    const filters = element('div', { className: 'record-filters' }, [
+      element('div', { className: 'field' }, [element('label', { text: 'Персонаж' }), characterFilter]),
+      element('div', { className: 'field' }, [element('label', { text: 'Линия' }), lineFilter]),
     ]);
-    intensityRow.append(element('p', { className: 'muted', style: { fontSize: '11px', margin: '2px 0 0', gridColumn: '1 / -1' }, text: '1 — фон, почти не влияет; 3 — заметно; 5 — определяет поведение' }));
-    form.append(element('h3', { text: `Новое ${singular}` }), text, participants.box, knownBy.box, intensityRow, submit);
-    intensity.addEventListener('input', () => { intensity.nextElementSibling.textContent = intensity.value; });
+
+    // New record: folded by default so the list gets the screen.
+    const form = element('form', { className: 'record-form' });
+    const text = element('textarea', { placeholder: `Опишите ${singular}…`, required: true, 'aria-label': `Текст: ${singular}` });
+    const participants = makeRoster('Участники (никто не выбран — общее для чата)');
+    const knownBy = makeRoster('Кому ещё известно (участники знают всегда; остальные не должны упоминать)');
+    linkRosters(participants, knownBy);
+    const intensity = intensityControl(3);
+    const submit = button(`Добавить ${singular}`, 'btn primary', () => {});
+    submit.type = 'submit';
+    form.append(text, participants.box, knownBy.box, intensity.row, submit);
     form.addEventListener('submit', (event) => {
       event.preventDefault();
       if (!text.value.trim()) return;
       act(type === 'memories' ? 'onAddMemory' : 'onAddTension', {
-        participantIds: [...participants.list.querySelectorAll('input:checked')].map(input => input.value),
-        knownBy: [...knownBy.list.querySelectorAll('input:checked')].map(input => input.value),
-        text: text.value.trim(), intensity: Number(intensity.value),
+        participantIds: participants.checked(), knownBy: knownBy.checked(),
+        text: text.value.trim(), intensity: Number(intensity.input.value),
       }, type === 'memories' ? 'memory-add' : 'tension-add');
       text.value = '';
     });
-    const chips = element('div', { className: 'chips' });
-    const chip = (label, filter, active) => chips.append(button(label, `btn${active ? ' active' : ''}`, () => { recordFilter = filter; render(); }));
-    chip('Все', {}, !recordFilter.characterId && !recordFilter.relationshipId);
-    for (const character of snapshot.characters || []) chip(characterName(character), { characterId: characterId(character) }, recordFilter.characterId === characterId(character));
-    for (const relation of snapshot.pairs || []) chip(pairLabel(snapshot, relation), { relationshipId: pairId(relation), pairIds: [pairSource(relation), pairTarget(relation)] }, recordFilter.relationshipId === pairId(relation));
-    const records = filterRecords(collectRecords(snapshot, type), recordFilter);
-    const list = element('div', { className: 'card' }, [element('h3', { text: type === 'memories' ? 'Воспоминания' : 'Активные напряжения' }), chips, renderRecords(records, type)]);
-    return element('div', { className: 'grid' }, [form, list]);
+    const foldKey = type === 'memories' ? 'newMemory' : 'newTension';
+
+    const records = filterRecords(all, recordFilter);
+    const heading = type === 'memories' ? 'Воспоминания' : 'Активные напряжения';
+    const list = element('div', { className: 'card' }, [
+      element('div', { className: 'record-list-head' }, [element('h3', { text: heading }), element('span', { className: 'muted', text: `${records.length} из ${all.length}` })]),
+      filters,
+      renderRecords(records, type),
+    ]);
+    return element('div', { className: 'records-view' }, [fold(foldKey, `+ Новое ${singular}`, '', form), list]);
   }
 
   function renderRecords(items, type) {
     if (!items.length) return element('div', { className: 'empty', text: 'Здесь пока ничего нет.' });
-    const stack = element('div', { className: 'stack' });
-    for (const item of items) {
-      const article = element('article', { className: 'item', style: item.disabled ? 'opacity:.45' : '' }, [
-        ...(Array.isArray(item.participantIds) ? [element('p', { className: 'muted', text: item.participantIds.length ? item.participantIds.map(id => characterName(snapshot.characters.find(character => characterId(character) === id), id)).join(', ') : 'Общее для чата' })] : []),
-        ...((item.knownBy ?? []).length !== (item.participantIds ?? []).length || (item.knownBy ?? []).some(id => !(item.participantIds ?? []).includes(id))
-          ? [element('p', { className: 'muted', text: `Известно только: ${(item.knownBy ?? []).map(id => characterName(snapshot.characters.find(character => characterId(character) === id), id)).join(', ')}` })] : []),
-        element('div', { className: 'item-head' }, [
-          element('strong', { text: `${item.disabled ? '⏻ откл. · ' : ''}${item.title || (item.intensity ? `Интенсивность: ${item.intensity}/5` : 'Запись')}` }),
+    const kind = type === 'memories' ? 'memory' : 'tension';
+    const stack = element('div', { className: 'record-list' });
+    // Newest first, like the history tab.
+    for (const item of [...items].reverse()) {
+      const owner = { kind, shared: !item.relationshipId, relationshipId: item.relationshipId ?? undefined, itemId: item.id };
+      if (editingRecordId === item.id) { stack.append(renderRecordEditor(item, owner)); continue; }
+      const intensity = Math.max(0, Math.min(5, Number(item.intensity) || 0));
+      const participantIds = item.participantIds ?? [];
+      const knownBy = item.knownBy ?? participantIds;
+      const secret = knownBy.length !== participantIds.length || knownBy.some(id => !participantIds.includes(id))
+        || (participantIds.length && (snapshot.characters || []).some(character => !knownBy.includes(characterId(character))));
+      const extraKnown = knownBy.filter(id => !participantIds.includes(id));
+      const article = element('article', { className: `record${item.disabled ? ' off' : ''}` }, [
+        element('div', { className: 'record-head' }, [
+          intensity ? element('span', { className: 'record-intensity', title: `Интенсивность ${intensity}/5`, text: '●'.repeat(intensity) + '○'.repeat(5 - intensity) }) : null,
+          item.disabled ? element('span', { className: 'record-badge', text: 'отключено' }) : null,
           element('time', { text: formatTime(item.timestamp || item.createdAt || item.date) }),
-        ]),
-        element('p', { text: item.text || item.description || item.content || String(item) }),
+        ].filter(Boolean)),
+        element('p', { className: 'record-text', text: item.text || item.description || item.content || String(item) }),
+        element('div', { className: 'record-people' }, participantIds.length
+          ? participantIds.map(id => element('span', { className: 'chip', text: nameOf(id) }))
+          : [element('span', { className: 'chip', text: 'Общее для чата' })]),
+        ...(secret && participantIds.length ? [element('p', { className: 'record-secret', text: extraKnown.length
+          ? `Знают также: ${extraKnown.map(nameOf).join(', ')}. Остальные не в курсе.`
+          : 'Знают только участники.' })] : []),
       ]);
-      const controls = element('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' } }, [
-        button(item.disabled ? 'Включить' : 'Отключить', 'btn', () => act('onToggleRecord', {
-          kind: type === 'memories' ? 'memory' : 'tension', shared: !item.relationshipId,
-          relationshipId: item.relationshipId ?? undefined, itemId: item.id, disabled: !item.disabled,
-        }, 'record-toggle'), item.disabled ? 'Включить запись' : 'Отключить запись: не попадёт в промпт'),
-        button('Удалить', 'btn', () => act('onRemoveRecord', {
-          kind: type === 'memories' ? 'memory' : 'tension', shared: !item.relationshipId,
-          relationshipId: item.relationshipId ?? undefined, itemId: item.id,
-        }, 'record-remove'), 'Удалить запись'),
+      const controls = element('div', { className: 'record-actions' }, [
+        button('Изменить', 'btn', () => { editingRecordId = item.id; render(); }, 'Изменить текст, участников, кому известно и интенсивность'),
+        button(item.disabled ? 'Включить' : 'Отключить', 'btn', () => act('onToggleRecord', { ...owner, disabled: !item.disabled }, 'record-toggle'),
+          item.disabled ? 'Включить запись' : 'Отключить запись: не попадёт в промпт'),
+        button('Удалить', 'btn', () => act('onRemoveRecord', owner, 'record-remove'), 'Удалить запись'),
       ]);
-      for (const control of controls.children) control.style.cssText += ';min-height:28px;padding:3px 8px;font-size:12px';
       article.append(controls);
       stack.append(article);
     }
     return stack;
   }
 
-  function renderItems(items) {
-    if (!items.length) return element('div', { className: 'empty', text: 'Здесь пока ничего нет.' });
-    const stack = element('div', { className: 'stack' });
-    for (const item of items) {
-      stack.append(element('article', { className: 'item' }, [
-        ...(Array.isArray(item.participantIds) ? [element('p', { className: 'muted', text: item.participantIds.length ? item.participantIds.map(id => characterName(snapshot.characters.find(character => characterId(character) === id), id)).join(', ') : 'Общее для чата' })] : []),
-        ...((item.knownBy ?? []).length !== (item.participantIds ?? []).length || (item.knownBy ?? []).some(id => !(item.participantIds ?? []).includes(id))
-          ? [element('p', { className: 'muted', text: `Известно только: ${(item.knownBy ?? []).map(id => characterName(snapshot.characters.find(character => characterId(character) === id), id)).join(', ')}` })] : []),
-        element('div', { className: 'item-head' }, [
-          element('strong', { text: item.title || (item.intensity ? `Интенсивность: ${item.intensity}/5` : 'Запись') }),
-          element('time', { text: formatTime(item.timestamp || item.createdAt || item.date) }),
-        ]),
-        element('p', { text: item.text || item.description || item.content || String(item) }),
-      ]));
-    }
-    return stack;
+  function renderRecordEditor(item, owner) {
+    const form = element('form', { className: 'record editing' });
+    const text = element('textarea', { value: item.text || '', required: true, 'aria-label': 'Текст записи' });
+    const participants = makeRoster('Участники (никто не выбран — общее для чата)', item.participantIds ?? []);
+    const knownBy = makeRoster('Кому ещё известно', item.knownBy ?? item.participantIds ?? []);
+    linkRosters(participants, knownBy);
+    const intensity = intensityControl(Number(item.intensity) || 3);
+    const save = button('Сохранить', 'btn primary', () => {});
+    save.type = 'submit';
+    const cancel = button('Отмена', 'btn', () => { editingRecordId = null; render(); });
+    const notes = owner.shared ? [] : [element('p', { className: 'muted', style: { fontSize: '11px', margin: '0' }, text: 'Старая запись пары: если поменять участников или кому известно, она станет общей записью.' })];
+    form.append(text, participants.box, knownBy.box, intensity.row, ...notes, element('div', { className: 'record-actions' }, [save, cancel]));
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!text.value.trim()) return;
+      save.disabled = true;
+      const same = (left, right) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
+      const changes = { text: text.value.trim(), intensity: Number(intensity.input.value) };
+      // Send rosters only when they changed: for old pair records that is what moves them to shared ones.
+      if (!same(participants.checked(), item.participantIds ?? [])) changes.participantIds = participants.checked();
+      if (!same(knownBy.checked(), item.knownBy ?? item.participantIds ?? [])) changes.knownBy = knownBy.checked();
+      try {
+        await facade.invoke('onUpdateRecord', { ...owner, changes });
+        editingRecordId = null;
+        setStatus('Запись сохранена');
+        render();
+      } catch (error) {
+        setStatus(error?.message || 'Не удалось сохранить запись', true);
+      } finally { save.disabled = false; }
+    });
+    return form;
   }
 
   function renderTriangles() {

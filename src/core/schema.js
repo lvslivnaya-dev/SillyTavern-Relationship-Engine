@@ -6,7 +6,7 @@ export const MAX_ENTITIES = 1_000;
 export const MAX_RELATIONSHIPS = 10_000;
 const OPERATION_TYPES = new Set([
   'entity.upsert', 'entity.remove', 'relationship.upsert', 'relationship.remove', 'scale.delta', 'scale.set', 'factors.set', 'record.toggle',
-  'memory.add', 'memory.remove', 'tension.add', 'tension.remove', 'stage.set', 'scales.hide',
+  'memory.add', 'memory.remove', 'tension.add', 'tension.remove', 'stage.set', 'scales.hide', 'record.update',
 ]);
 
 export const DEFAULT_SCALES = Object.freeze([
