@@ -72,7 +72,7 @@ export function createRelationshipStudio(options = {}) {
     .triangle-head h3{margin:0}
     .relationship-card>details+details{margin-top:12px;padding-top:12px;border-top:1px solid var(--rs-line)}
     .relationship-card>details>summary{cursor:pointer;font-weight:600;margin-bottom:6px}
-    .pair-swap{justify-self:center;width:40px;min-height:36px;padding:4px;font-size:18px;line-height:1}
+    .pair-swap{justify-self:center;display:grid;place-items:center;width:30px;height:30px;min-height:30px;padding:0;font-size:15px;line-height:1;border-radius:8px}
     .pair-swap:disabled{opacity:.4;cursor:default}
     .mobile-tools{display:none}
     .sidebar-tools>summary{display:none}
@@ -410,8 +410,9 @@ export function createRelationshipStudio(options = {}) {
 
   function renderCharacterManager() {
     const box = element('div', { className: 'card' });
-    // Several columns on wide screens; narrows down to one on phones by itself.
-    const list = element('div', { className: 'characters', style: { display: 'grid', gap: '6px', gridTemplateColumns: 'repeat(auto-fill,minmax(min(100%,210px),1fr))' } });
+    // Up to three columns on wide screens (a column never gets narrower than a third);
+    // narrows down to one on phones by itself.
+    const list = element('div', { className: 'characters', style: { display: 'grid', gap: '6px', gridTemplateColumns: 'repeat(auto-fill,minmax(min(100%,max(210px,calc((100% - 12px) / 3))),1fr))' } });
     const personaId = snapshot.personaId || snapshot.ui?.personaId || '';
     const removableCharacters = (snapshot.characters || []).filter(character => characterId(character) !== personaId);
     // Drop selections that no longer exist (deleted characters, switched chats).
