@@ -851,8 +851,42 @@ export function createRelationshipStudio(options = {}) {
     });
     preview.append(previewText);
     const wrapper = element('div');
-    wrapper.append(form, renderDataTransfer(), preview);
+    wrapper.append(form, renderDataTransfer(), preview, renderDiagnostics());
     return wrapper;
+  }
+
+  function renderDiagnostics() {
+    const card = element('div', { className: 'card settings', style: { marginTop: '14px' } }, [
+      element('h3', { text: 'Диагностика' }),
+      element('p', { className: 'muted', style: { fontSize: '11px', marginTop: '0' }, text: 'Журнал записывает, когда анализ запускался, почему пропускался и что не удалось сохранить. Если что-то работает не так — скопируйте журнал и пришлите разработчику. Ключей API и текста чата в нём нет.' }),
+    ]);
+    const output = element('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: '0 0 10px', maxHeight: '220px', overflow: 'auto', fontSize: '11px' } });
+    const refresh = () => {
+      try { output.textContent = facade.invoke('onGetDiagnostics', {}) || '(журнал пуст)'; }
+      catch (error) { output.textContent = `Не удалось прочитать журнал: ${error?.message ?? error}`; }
+    };
+    refresh();
+    const copy = button('Скопировать журнал', 'btn', async () => {
+      refresh();
+      try {
+        await navigator.clipboard.writeText(output.textContent);
+        setStatus('Журнал скопирован');
+      } catch {
+        // Clipboard API is unavailable on plain-HTTP origins (typical for a phone on LAN): select the text instead.
+        const range = document.createRange();
+        range.selectNodeContents(output);
+        const selection = shadow.getSelection?.() ?? document.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        setStatus('Текст журнала выделен — скопируйте его вручную', true);
+      }
+    });
+    card.append(output, element('div', { className: 'row' }, [
+      copy,
+      button('Обновить', 'btn', refresh),
+      button('Очистить', 'btn', () => { act('onClearDiagnostics', {}); refresh(); }),
+    ]));
+    return card;
   }
 
   function renderDataTransfer() {

@@ -20,6 +20,7 @@ import { loadLinkedLore, analyzeLorebookCharacters, canonKeys, namesMatch } from
 import { generateGrowthFactors, directionPresets } from './src/integration/growth.js';
 import { getAnalysisTokenUsage } from './src/integration/analyzer.js';
 import { onChangeBusy, getBusy, resetBusy } from './src/integration/busy.js';
+import { clearLog, formatLog, logEvent } from './src/integration/diagnostics.js';
 import { triangleEdges } from './src/core/records.js';
 import { mountExtensionShell } from './src/integration/shell.js';
 import { createChatStorage } from './src/integration/storage.js';
@@ -107,7 +108,12 @@ export async function init() {
 
   async function commit(next, immediate = true) {
     state = importState(next);
-    await storage.save(state);
+    try {
+      await storage.save(state);
+    } catch (error) {
+      logEvent('error', 'Не удалось сохранить отношения в чат', error);
+      throw error;
+    }
     refreshPrompt();
     notify();
     return state;
@@ -683,6 +689,15 @@ export async function init() {
     onImport: importFromStudio,
     onExport: exportForStudio,
     onSettingsChange: changeSettings,
+    onGetDiagnostics: () => formatLog({
+      'Движок отношений': 'журнал диагностики',
+      'Браузер': globalThis.navigator?.userAgent ?? '?',
+      'Экран': `${globalThis.innerWidth ?? '?'}×${globalThis.innerHeight ?? '?'}`,
+      'Автоанализ': settings.autoAnalyze ? 'вкл' : 'выкл',
+      'Инъекция': settings.enabled && settings.injectPrompt ? 'вкл' : 'выкл',
+      'Персонажей / линий': `${Object.keys(state.entities).length} / ${Object.keys(state.relationships).length}`,
+    }),
+    onClearDiagnostics: () => { clearLog(); notify(); },
     onAnalyzeCurrent: () => enqueueAnalysis(SillyTavern.getContext().chat.length - 1, true),
     onAnalyzeHistory: enqueueHistory,
     onAnalyzeLorebooks: analyzeLorebooksForCharacters,
@@ -746,12 +761,54 @@ export async function init() {
     return typeof document !== 'undefined' && document.body?.dataset?.generating === 'true';
   }
 
-  async function waitForGenerationEnd(timeoutMs = 180000) {
-    const deadline = Date.now() + timeoutMs;
-    while (isGenerationActive() && Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
+  // Watch the attribute instead of polling: phone browsers freeze timers in a
+  // background tab, so a polling loop could time out while the screen was off.
+  async function waitForGenerationEnd(timeoutMs = 600000) {
+    if (!isGenerationActive()) return;
+    logEvent('info', 'Жду окончания основной генерации перед анализом');
+    await new Promise(resolve => {
+      let timer = null;
+      const observer = new MutationObserver(() => { if (!isGenerationActive()) done(); });
+      function done() { clearTimeout(timer); observer.disconnect(); resolve(); }
+      observer.observe(document.body, { attributes: true, attributeFilter: ['data-generating'] });
+      timer = setTimeout(done, timeoutMs);
+    });
     if (isGenerationActive()) throw new Error('Основная генерация не завершилась вовремя; анализ отменён.');
+  }
+
+  function isPageHidden() {
+    return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+  }
+
+  /** Phones suspend network requests of hidden tabs; start analysis only when the user is back. */
+  function waitUntilVisible() {
+    if (!isPageHidden()) return Promise.resolve();
+    logEvent('info', 'Вкладка скрыта — анализ отложен до возвращения в таверну');
+    return new Promise(resolve => {
+      const onVisible = () => {
+        if (isPageHidden()) return;
+        document.removeEventListener('visibilitychange', onVisible);
+        resolve();
+      };
+      document.addEventListener('visibilitychange', onVisible);
+    });
+  }
+
+  /** One retry when the request died because the tab was hidden mid-flight. */
+  async function analyzeWithResume(ctx, sourceState, message, loreContext) {
+    let hiddenDuringRequest = false;
+    const markHidden = () => { if (isPageHidden()) hiddenDuringRequest = true; };
+    document.addEventListener('visibilitychange', markHidden);
+    try {
+      return await analyzeMessage(ctx, sourceState, message, settings, loreContext);
+    } catch (error) {
+      if (!hiddenDuringRequest) throw error;
+      logEvent('warn', 'Запрос анализа прервался, пока вкладка была скрыта — повторяю', error);
+      await waitUntilVisible();
+      return analyzeMessage(ctx, sourceState, message, settings, loreContext);
+    } finally {
+      document.removeEventListener('visibilitychange', markHidden);
+    }
   }
 
   async function confirmLargeChanges(operations) {
@@ -785,40 +842,43 @@ export async function init() {
   async function processMessage(messageIndex, force = false, expectedChatId, expectedEpoch = chatEpoch) {
     const ctx = SillyTavern.getContext();
     const sourceChatId = ctx.getCurrentChatId();
-    if ((expectedChatId != null && sourceChatId !== expectedChatId) || expectedEpoch !== chatEpoch) return;
+    const label = `Сообщение #${messageIndex}`;
+    const skip = reason => { logEvent('info', `${label}: анализ пропущен — ${reason}`); };
+    if ((expectedChatId != null && sourceChatId !== expectedChatId) || expectedEpoch !== chatEpoch) return skip('чат сменился до начала анализа');
     if (isGenerationActive()) await waitForGenerationEnd();
-    if (expectedEpoch !== chatEpoch || SillyTavern.getContext().getCurrentChatId() !== sourceChatId) return;
+    if (expectedEpoch !== chatEpoch || SillyTavern.getContext().getCurrentChatId() !== sourceChatId) return skip('чат сменился во время генерации');
     const message = ctx.chat?.[messageIndex];
-    if (!message || message.is_user || !message.mes?.trim() || !settings.enabled) return;
+    if (!settings.enabled) return skip('расширение выключено');
+    if (!message || message.is_user || !message.mes?.trim()) return skip('нет ответа бота с текстом');
     if (message.extra?.[MESSAGE_EXTRA_KEY]?.historyImported) {
       if (force) throw new Error('Это сообщение уже учтено в общем анализе истории. Для пересчёта используйте «Проанализировать историю».');
-      return;
+      return skip('уже учтено в анализе истории');
     }
     const textHash = fingerprint(message.mes);
-    if (!force && message.extra?.[MESSAGE_EXTRA_KEY]?.fingerprint === textHash) return;
+    if (!force && message.extra?.[MESSAGE_EXTRA_KEY]?.fingerprint === textHash) return skip('этот текст уже проанализирован');
+    if (!force) await waitUntilVisible();
     const sourceState = state;
     const loreContext = await loadLinkedLore(ctx, sourceState);
-    if (expectedEpoch !== chatEpoch || state !== sourceState) return;
-    const result = await analyzeMessage(ctx, sourceState, message, settings, loreContext);
-    const current = SillyTavern.getContext();
-    if (state !== sourceState || expectedEpoch !== chatEpoch || current.getCurrentChatId() !== sourceChatId || fingerprint(current.chat?.[messageIndex]?.mes) !== textHash) {
-      console.info('[Relationship Engine] Discarded stale analysis after chat or message change.');
-      return;
-    }
-    if (!await confirmLargeChanges(result.operations)) return;
-    if (expectedEpoch !== chatEpoch || SillyTavern.getContext().getCurrentChatId() !== sourceChatId
-      || fingerprint(SillyTavern.getContext().chat?.[messageIndex]?.mes) !== textHash) return;
+    if (expectedEpoch !== chatEpoch) return skip('чат сменился');
+    logEvent('info', `${label}: анализ начат${force ? ' (вручную)' : ''}`);
+    const result = await analyzeWithResume(ctx, sourceState, message, loreContext);
+    // Analysis yields relative deltas, so a newer state (a moved slider, a selected
+    // pair) is fine to apply them to. Only a different chat or message text is stale.
+    const isStale = () => expectedEpoch !== chatEpoch || SillyTavern.getContext().getCurrentChatId() !== sourceChatId
+      || fingerprint(SillyTavern.getContext().chat?.[messageIndex]?.mes) !== textHash;
+    if (isStale()) return skip('чат или текст сообщения изменились, пока модель отвечала');
+    if (!await confirmLargeChanges(result.operations)) return skip('скачок отклонён пользователем');
+    if (isStale()) return skip('чат или текст сообщения изменились');
     const acceptedNewCharacters = await confirmNewCharacters(result.newCharacters, ctx);
-    if (acceptedNewCharacters === null) return;
-    if (expectedEpoch !== chatEpoch || SillyTavern.getContext().getCurrentChatId() !== sourceChatId
-      || fingerprint(SillyTavern.getContext().chat?.[messageIndex]?.mes) !== textHash) return;
+    if (acceptedNewCharacters === null) return skip('анализ отменён');
+    if (isStale()) return skip('чат или текст сообщения изменились');
     const transactionId = `message:${messageIndex}:${textHash}`;
     let next = state.operations.some(operation => operation.messageId === String(messageIndex))
       ? rollbackMessage(state, String(messageIndex)) : state;
     const applied = applyAnalysisResult(next, result, { transactionId, messageId: String(messageIndex), messageIndex }, acceptedNewCharacters);
     next = applied.state;
     const operations = applied.operations;
-    if (!operations.length) return;
+    if (!operations.length) return skip('модель не нашла изменений в отношениях');
     message.extra ??= {};
     message.extra[MESSAGE_EXTRA_KEY] = {
       fingerprint: textHash,
@@ -827,8 +887,9 @@ export async function init() {
       analyzedAt: new Date().toISOString(),
     };
     await commit(next, true);
+    logEvent('info', `${label}: применено изменений — ${operations.length}, состояние сохранено`);
     if (isGenerationActive()) await waitForGenerationEnd();
-    await current.saveChat();
+    await SillyTavern.getContext().saveChat();
   }
 
   function enqueueAnalysis(messageIndex, force = false) {
@@ -836,7 +897,7 @@ export async function init() {
     const expectedChatId = queuedContext.getCurrentChatId();
     const expectedEpoch = chatEpoch;
     analysisQueue = analysisQueue.then(() => processMessage(Number(messageIndex), force, expectedChatId, expectedEpoch)).catch(error => {
-      console.error('[Relationship Engine] Message processing failed.', error);
+      logEvent('error', `Сообщение #${messageIndex}: анализ не удался`, error);
       globalThis.toastr?.error?.(error.message, 'Движок отношений');
     });
     return analysisQueue;
