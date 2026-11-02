@@ -81,6 +81,7 @@ export async function init() {
       lorebooks: { available: SillyTavern.getContext().getWorldInfoNames?.() ?? [], selected: state.ui?.linkedLorebooks ?? [], cardWorlds: cardWorldNames(), status: 'Книги подключаются только к анализатору этого чата. Исходные файлы не изменяются.' },
       settings: {
         autoTrack: settings.autoAnalyze, widgetEnabled: settings.widget.visible,
+        maxPromptCharacters: settings.maxPromptCharacters,
         ...Object.fromEntries(TOGGLE_SETTINGS.map(key => [key, settings[key] !== false])),
       },
       widget: {
@@ -139,14 +140,16 @@ export async function init() {
 
   function buildInjectionText(targetState, persona) {
     if (!settings.enabled || !settings.injectPrompt) return '';
+    // The budget is applied per section inside selectRuntimePrompt; slicing the finished
+    // text used to drop every memory, tension and stranger rule at the end.
     return selectRuntimePrompt({ ...targetState, ui: { ...targetState.ui, personaId: persona } }, {
-      maxRelationships: Math.min(Object.keys(targetState.relationships).length, 8),
       memoryLimit: 2,
       tensionLimit: 2,
       includeMemories: settings.sendMemories !== false,
       includeTensions: settings.sendTensions !== false,
       includeFactors: settings.sendFactors !== false,
-    }).slice(0, settings.maxPromptCharacters);
+      maxCharacters: Number(settings.maxPromptCharacters) || 4000,
+    });
   }
 
   function refreshPrompt() {
@@ -245,6 +248,10 @@ export async function init() {
     if (Object.hasOwn(patch, 'autoTrack')) settings.autoAnalyze = Boolean(patch.autoTrack);
     if (Object.hasOwn(patch, 'widgetEnabled')) settings.widget.visible = Boolean(patch.widgetEnabled);
     for (const key of TOGGLE_SETTINGS) if (Object.hasOwn(patch, key)) settings[key] = Boolean(patch[key]);
+    if (Object.hasOwn(patch, 'maxPromptCharacters')) {
+      const limit = Math.round(Number(patch.maxPromptCharacters));
+      if (Number.isFinite(limit)) settings.maxPromptCharacters = Math.max(800, Math.min(20000, limit));
+    }
     context.saveSettingsDebounced();
     widget.element.hidden = !settings.widget.visible;
     refreshPrompt();
@@ -780,6 +787,7 @@ export async function init() {
       { key: 'sendMemories', label: 'Отправлять модели воспоминания', type: 'checkbox' },
       { key: 'sendTensions', label: 'Отправлять модели напряжения', type: 'checkbox' },
       { key: 'sendFactors', label: 'Отправлять модели факторы роста', type: 'checkbox' },
+      { key: 'maxPromptCharacters', label: 'Объём данных для модели, символов (800–20000; ~1 токен на 3–4 символа). Не влезает всё — уходят самые слабые линии и старые записи.', type: 'number', min: 800, max: 20000 },
     ],
   });
   widget = createRelationshipWidget({
@@ -996,18 +1004,24 @@ export async function init() {
     const personaLines = settings.confirmPersonaLines === false ? [] : created.filter(relation => personaId && relation.to === personaId);
     let rejected = new Set();
     if (personaLines.length) {
-      const nameOf = id => escapeHtml(dryRun.entities[id]?.name ?? id);
-      const items = personaLines.map(relation => `<li>${nameOf(relation.from)} → ${nameOf(relation.to)}</li>`).join('');
+      // One checkbox per line (all checked): create only the ticked ones; "Без них" creates none.
+      const nameOf = id => dryRun.entities[id]?.name ?? id;
       const ctx = SillyTavern.getContext();
-      const answer = await ctx.Popup.show.confirm(
-        'Новые линии с персоной',
-        `<p>Анализ хочет начать отслеживать чувства к персоне:</p><ul style="text-align:left;margin:0;padding-left:18px">${items}</ul><p>Создать эти линии? «Нет» — применить анализ без них.</p>`,
-        { okButton: 'Создать', cancelButton: 'Без них' },
+      const inputs = personaLines.map((relation, index) => ({
+        id: `relationship-engine-persona-line-${index}`,
+        label: `${nameOf(relation.from)} → ${nameOf(relation.to)}`,
+        defaultState: true,
+      }));
+      const popup = new ctx.Popup(
+        '<h3>Новые линии с персоной</h3><p>Анализ хочет начать отслеживать чувства к персоне. Отметьте линии, которые нужно создать; анализ применится и без остальных.</p>',
+        ctx.POPUP_TYPE.CONFIRM, null,
+        { okButton: 'Создать отмеченные', cancelButton: 'Без них', customInputs: inputs },
       );
-      if (answer !== ctx.POPUP_RESULT.AFFIRMATIVE) {
-        rejected = new Set(personaLines.map(relation => relation.id));
-        logEvent('info', `Новые линии с персоной отклонены: ${personaLines.length}`);
-      }
+      const answer = await popup.show();
+      rejected = new Set(personaLines
+        .filter((relation, index) => answer !== ctx.POPUP_RESULT.AFFIRMATIVE || !popup.inputResults?.get(inputs[index].id))
+        .map(relation => relation.id));
+      if (rejected.size) logEvent('info', `Новые линии с персоной отклонены: ${rejected.size} из ${personaLines.length}`);
     }
     return (subjectId, objectId) => basePolicy(subjectId, objectId) && !rejected.has(relationshipId(subjectId, objectId));
   }

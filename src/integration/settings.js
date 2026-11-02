@@ -14,7 +14,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   sendMemories: true,
   sendTensions: true,
   sendFactors: true,
-  maxPromptCharacters: 2400,
+  maxPromptCharacters: 4000,
   analysisMaxCharacters: 12000,
   widget: {
     visible: true,
@@ -31,6 +31,8 @@ export function getSettings(context) {
   settingsRoot[MODULE_ID] ??= structuredClone(DEFAULT_SETTINGS);
   const settings = settingsRoot[MODULE_ID];
   mergeMissing(settings, DEFAULT_SETTINGS);
+  // 2400 was the old built-in limit and was never editable, so it is never a user's choice.
+  if (settings.maxPromptCharacters === 2400) settings.maxPromptCharacters = DEFAULT_SETTINGS.maxPromptCharacters;
   return settings;
 }
 

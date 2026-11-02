@@ -47,3 +47,24 @@ test('allowNewPair blocks new lines but keeps changes on existing ones', () => {
   assert.deepEqual(lines, ['a>p', 'b>a']);
   assert.equal(Object.values(applied.state.relationships).find(relation => relation.from === 'b').scales.trust, 32);
 });
+
+test('budget keeps rules, the strongest lines and recent records instead of cutting the tail', () => {
+  const operations = [createOperation('entity.upsert', { id: 'p', name: 'Ева' })];
+  for (let index = 0; index < 12; index += 1) {
+    operations.push(createOperation('entity.upsert', { id: `c${index}`, name: `Герой${index}` }));
+    operations.push(createOperation('relationship.upsert', { from: `c${index}`, to: 'p', scales: { affection: index * 5 }, factors: [{ scaleId: 'trust', direction: 'up', text: 'x'.repeat(150) }] }));
+  }
+  for (let index = 0; index < 20; index += 1) {
+    operations.push(createOperation('memory.add', { shared: true, item: { id: `m${index}`, text: `Память ${index} ${'y'.repeat(150)}`, participantIds: ['c0', 'p'], createdAt: new Date(2026, 0, 1, 0, index).toISOString() } }));
+  }
+  const state = applyOperations(createDefaultState(), operations);
+  state.ui.personaId = 'p';
+  state.ui.strangerPairs = ['c11|p'];
+  const text = selectRuntimePrompt(state, { maxCharacters: 3000 });
+  assert.ok(text.length <= 3000, `бюджет соблюдён (${text.length})`);
+  assert.match(text, /^strangers\[Герой11 & Ева\]/, 'правила идут первыми и не обрезаются');
+  assert.match(text, /Герой11>Ева/, 'самая сильная линия на месте');
+  assert.doesNotMatch(text, /Герой0>Ева/, 'отбрасывается самая слабая');
+  assert.match(text, /Память 19/, 'свежая запись на месте');
+  assert.doesNotMatch(text, /Память 0 /, 'старая запись уступила место');
+});

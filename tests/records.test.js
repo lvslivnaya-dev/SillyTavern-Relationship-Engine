@@ -93,8 +93,8 @@ test('knownBy defaults to participants and narrows prompt disclosure', () => {
   const normalized = collectRecords({ ...state, records: { memories: [shared], tensions: [] } }, 'memories')[0];
   assert.deepEqual(normalized.knownBy, ['a', 'b']);
   const prompt = selectRuntimePrompt({ ...state, records: { memories: [shared], tensions: [] }, relationships: {} });
-  assert.match(prompt, /shared-memories\[Анна\]=Тайна семьи \[known only to: Анна,Леон\]/);
-  assert.match(prompt, /secret from Мира/);
+  assert.match(prompt, /shared-memories\[Анна\]=Тайна семьи \[known only to: Анна,Леон; everyone else is unaware\]/);
+  assert.doesNotMatch(prompt, /Мира/, 'неосведомлённые больше не перечисляются — это раздувало каждую строку');
   const fallback = collectRecords({ ...state, records: { memories: [{ id: 'open', text: 'x', participantIds: ['a','b'] }], tensions: [] } }, 'memories')[0];
   assert.deepEqual(fallback.knownBy, ['a', 'b']);
 });

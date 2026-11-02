@@ -39,16 +39,21 @@ export function selectRuntimePrompt(state, options = {}) {
   const includeKind = { memories: options.includeMemories !== false, tensions: options.includeTensions !== false };
   const memoryLimit = includeKind.memories ? Math.max(0, options.memoryLimit ?? 3) : 0;
   const tensionLimit = includeKind.tensions ? Math.max(0, options.tensionLimit ?? 3) : 0;
-  const maxRelationships = Math.max(0, options.maxRelationships ?? 8);
+  const maxRelationships = Math.max(0, options.maxRelationships ?? Infinity);
+  const personaId = state.ui?.personaId || '';
 
+  // Strongest feelings first (lines toward the persona get a bonus), so a budget cut drops the faintest lines.
+  const weight = relation => Object.entries(relation.scales || {})
+    .filter(([id]) => !(relation.hiddenScales ?? []).includes(id))
+    .reduce((sum, [, value]) => sum + Math.abs(Number(value) || 0), 0) + (personaId && relation.to === personaId ? 50 : 0);
   const selected = Object.values(state.relationships || {})
-    .filter((relation) => relation.from !== (state.ui?.personaId || ''))
+    .filter((relation) => relation.from !== personaId)
     .filter((relation) => !relationshipSet || relationshipSet.has(relation.id))
     .filter((relation) => !actorSet || actorSet.has(relation.from) || actorSet.has(relation.to))
-    .sort((left, right) => left.id.localeCompare(right.id))
+    .sort((left, right) => weight(right) - weight(left) || left.id.localeCompare(right.id))
     .slice(0, maxRelationships);
 
-  const lines = [];
+  const relationLines = [];
   for (const relation of selected) {
     const from = state.entities[relation.from]?.name || relation.from;
     const to = state.entities[relation.to]?.name || relation.to;
@@ -69,42 +74,90 @@ export function selectRuntimePrompt(state, options = {}) {
     const factors = options.includeFactors === false ? '' : (relation.factors || []).slice(0, 4)
       .map(factor => `${factor.direction === 'down' ? '-' : '+'}${factor.scaleId}: ${factor.text}`).join(' | ');
     if (factors) fields.push(`grow[${factors.trim()}]`);
-    lines.push(fields.filter(Boolean).join(';'));
+    relationLines.push(fields.filter(Boolean).join(';'));
   }
+
+  // Shared records and secret pair records, ranked by intensity and freshness.
+  const candidates = [];
   for (const kind of ['memories', 'tensions']) {
     if (!includeKind[kind]) continue;
-    const items = collectRecords(state, kind).filter(item => !item.relationshipId && !item.disabled).slice(-8);
-    for (const item of items) {
+    for (const item of collectRecords(state, kind).filter(item => !item.relationshipId && !item.disabled)) {
       const participants = item.participantIds.map(id => state.entities[id]?.name || id).join(',') || 'all';
-      lines.push(`shared-${kind}[${participants}]=${item.text}${describeKnownBy(state, item)}`);
+      candidates.push({ item, line: `shared-${kind}[${participants}]=${clip(item.text)}${describeKnownBy(state, item)}` });
     }
-  }
-  for (const kind of ['memories', 'tensions']) {
-    if (!includeKind[kind]) continue;
     for (const item of collectRecords(state, kind).filter(item => item.relationshipId && !item.disabled)) {
       const annotation = describeKnownBy(state, item);
-      if (annotation) lines.push(`secret-${kind}=${item.text}${annotation}`);
+      if (annotation) candidates.push({ item, line: `secret-${kind}=${clip(item.text)}${annotation}` });
     }
   }
+  // Freshness comes from creation time, so memories and tensions are ranked together
+  // (list order would make every tension look newer than every memory).
+  const time = candidate => Date.parse(candidate.item.createdAt ?? candidate.item.timestamp ?? '') || 0;
+  candidates.forEach((candidate, order) => { candidate.order = order; });
+  candidates.sort((left, right) => time(left) - time(right) || left.order - right.order);
+  const total = candidates.length;
+  candidates.forEach((candidate, rank) => {
+    const freshness = total > 1 ? rank / (total - 1) : 1;
+    candidate.score = (Number(candidate.item.intensity) || 3) + 4 * freshness;
+  });
+
+  const ruleLines = [];
   // Strangers are toggled by the user only; the flag is mutual, stored as a sorted "a|b" key.
   for (const key of state.ui?.strangerPairs ?? []) {
     const [first, second] = key.split('|').map(id => state.entities[id]?.name);
     if (!first || !second) continue;
-    lines.push(`strangers[${first} & ${second}]: not introduced yet — they do not know each other's names, history or private details. They must meet naturally or be introduced by someone who knows both; never use the other's name before learning it in the story.`);
+    ruleLines.push(`strangers[${first} & ${second}]: not introduced yet — they do not know each other's names, history or private details. They must meet naturally or be introduced by someone who knows both; never use the other's name before learning it in the story.`);
   }
   for (const triangle of state.ui?.triangles ?? []) {
-    lines.push(`triangle center=${state.entities[triangle.centerId]?.name}; others=${[triangle.firstId, triangle.secondId].map(id => state.entities[id]?.name).join(',')}; grouping only, do not invent love or rivalry`);
+    ruleLines.push(`triangle center=${state.entities[triangle.centerId]?.name}; others=${[triangle.firstId, triangle.secondId].map(id => state.entities[id]?.name).join(',')}; grouping only, do not invent love or rivalry`);
   }
-  return lines.join('\n');
+
+  const budget = Number.isFinite(options.maxCharacters) ? Math.max(0, options.maxCharacters) : Infinity;
+  const ranked = [...candidates].sort((left, right) => right.score - left.score);
+  if (budget === Infinity) {
+    return [...ruleLines, ...relationLines, ...candidates.map(candidate => candidate.line)].join('\n');
+  }
+  // Budget by section instead of cutting the tail: rules always, then lines and
+  // records share the rest; whatever one section leaves unused goes to the other.
+  const rules = fitLines(ruleLines, budget);
+  const rest = budget - rules.used;
+  const relationShare = ranked.length ? Math.floor(rest * 0.55) : rest;
+  const relations = fitLines(relationLines, relationShare);
+  const records = fitLines(ranked.map(candidate => candidate.line), rest - relations.used);
+  const extraRelations = fitLines(relationLines.filter(line => !relations.kept.includes(line)), rest - relations.used - records.used);
+  const keptRelations = relationLines.filter(line => relations.kept.includes(line) || extraRelations.kept.includes(line));
+  // Records go out in story order, not in ranking order.
+  const keptRecords = candidates.filter(candidate => records.kept.includes(candidate.line)).map(candidate => candidate.line);
+  return [...rules.kept, ...keptRelations, ...keptRecords].join('\n');
 }
 
-/** Annotate only when some registered character is unaware; compact output stays unchanged otherwise. */
+function clip(text, limit = 240) {
+  const value = String(text ?? '');
+  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
+}
+
+/** Whole lines that fit into `limit` characters (newlines included); a lone oversized line is shortened. */
+function fitLines(lines, limit) {
+  const kept = [];
+  let used = 0;
+  for (const line of lines) {
+    const cost = line.length + 1;
+    if (used + cost <= limit) { kept.push(line); used += cost; continue; }
+    if (!kept.length && limit - used > 80) {
+      const short = `${line.slice(0, limit - used - 2)}…`;
+      kept.push(short);
+      used += short.length + 1;
+    }
+  }
+  return { kept, used };
+}
+
+/** Annotate only when some registered character is unaware. Naming every unaware
+ * character made each line hundreds of characters long, so only the knowers are listed. */
 function describeKnownBy(state, item) {
   const known = item.knownBy ?? item.participantIds ?? [];
-  const others = Object.values(state.entities)
-    .filter(entity => !known.includes(entity.id))
-    .map(entity => entity.name);
-  if (!others.length) return '';
+  const someoneUnaware = Object.values(state.entities).some(entity => !known.includes(entity.id));
+  if (!someoneUnaware) return '';
   const names = known.map(id => state.entities[id]?.name || id).join(',');
-  return ` [known only to: ${names}] (secret from ${others.join(',')})`;
+  return ` [known only to: ${names}; everyone else is unaware]`;
 }
