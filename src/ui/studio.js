@@ -77,6 +77,12 @@ export function createRelationshipStudio(options = {}) {
     .triangle-head h3{margin:0}
     .triangle-goal{margin:-6px 0 14px;font-size:13px;line-height:1.45;overflow-wrap:anywhere}
     .sheet-section{margin:16px 0 6px;font-size:13px}
+    .trope-hint{font-size:12px;margin:6px 0 0;line-height:1.4}
+    .factor-origin{font-size:11px;color:var(--rs-accent)}
+    .pace-box{display:flex;flex-direction:column;gap:6px;align-items:flex-start;font-size:12px;margin:10px 0 0}
+    .pace-box:empty{display:none}
+    .pace-box .btn,.pace-line .btn{min-height:30px;padding:4px 10px;font-size:12px}
+    .pace-line{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;margin:4px 0}
     .sheet-section:first-child{margin-top:0}
     .relationship-card>details+details{margin-top:12px;padding-top:12px;border-top:1px solid var(--rs-line)}
     .relationship-card>details>summary{cursor:pointer;font-weight:600;margin-bottom:6px}
@@ -304,6 +310,11 @@ export function createRelationshipStudio(options = {}) {
     // Current factors of the triangle's lines (they are the same factors the pair dialog edits).
     const factors = (snapshot.pairs || []).filter(pair => lineIds.has(pairId(pair)))
       .flatMap(pair => (pair.factors ?? []).map(factor => ({ ...factor, relationshipId: pairId(pair) })));
+    const paceByLine = Object.fromEntries((snapshot.pairs || []).filter(pair => lineIds.has(pairId(pair)) && pair.pace)
+      .map(pair => [pairId(pair), { ...pair.pace }]));
+    const lineLabel = id => lines.find(line => line.relationshipId === id)?.label ?? id;
+    // A line's own trope (set in its card) outranks anything applied from the triangle.
+    const ownTrope = id => factors.find(factor => factor.relationshipId === id && factor.origin?.startsWith('pair-trope:'))?.origin;
 
     const goal = element('textarea', { value: triangle.goal ?? '', rows: 3, placeholder: 'Куда в итоге должны прийти отношения. Например: центр выбирает одного, второй принимает это и остаётся другом.', 'aria-label': 'Конечная точка' });
     const wish = element('input', { type: 'text', placeholder: 'Пожелание для генерации (необязательно)', 'aria-label': 'Пожелание к конечной точке' });
@@ -340,26 +351,78 @@ export function createRelationshipStudio(options = {}) {
           line,
           element('div', { className: 'factor-controls' }, [scale, direction, remove]),
           text,
-        ]));
+          originBadge(factor),
+        ].filter(Boolean)));
       });
       if (!factors.length) list.append(element('p', { className: 'muted', text: 'Факторов пока нет.' }));
     }
     renderRows();
+    const paceBox = element('div', { className: 'pace-box' });
+    function renderPace() {
+      paceBox.replaceChildren(...lines.filter(line => Object.keys(paceByLine[line.relationshipId] ?? {}).length).map(line =>
+        element('div', { className: 'pace-line' }, paceControls(paceByLine[line.relationshipId], () => {
+          paceByLine[line.relationshipId] = {};
+          renderPace();
+        }, `Темп ${line.label}`))));
+    }
+    renderPace();
     const addRow = button('+ Добавить фактор', 'btn', () => {
       factors.push({ relationshipId: lines[0]?.relationshipId, scaleId: metricDefinitions(snapshot)[0]?.key ?? 'trust', direction: 'up', text: '' });
       renderRows();
       list.querySelector('.factor-row:last-child textarea')?.focus();
     });
 
-    const tropeSelect = element('select', { 'aria-label': 'Троп треугольника' });
-    for (const trope of facade.invoke('onTriangleTropes', {}) ?? []) tropeSelect.append(element('option', { value: trope.id, text: trope.label }));
+    // Tropes: triangle tropes (by roles, all lines) and ordinary line tropes (all lines or one).
+    const triangleTropeList = facade.invoke('onTriangleTropes', {}) ?? [];
+    const pairTropeList = facade.invoke('onPairTropes', {}) ?? [];
+    const tropeSelect = element('select', { 'aria-label': 'Троп' });
+    const triangleGroup = element('optgroup', { label: 'Тропы треугольника' });
+    for (const trope of triangleTropeList) triangleGroup.append(element('option', { value: `t:${trope.id}`, text: trope.label }));
+    const pairGroup = element('optgroup', { label: 'Тропы линии' });
+    for (const trope of pairTropeList) pairGroup.append(element('option', { value: `p:${trope.id}`, text: trope.label }));
+    tropeSelect.append(triangleGroup, pairGroup);
+    const targetSelect = element('select', { 'aria-label': 'К каким линиям' });
+    targetSelect.append(element('option', { value: '', text: 'Ко всем линиям треугольника' }));
+    for (const line of lines) targetSelect.append(element('option', { value: line.relationshipId, text: `Только ${line.label}` }));
+    const tropeHint = element('p', { className: 'muted trope-hint' });
+    const describeTrope = () => {
+      const [kind, id] = tropeSelect.value.split(':');
+      const trope = (kind === 't' ? triangleTropeList : pairTropeList).find(item => item.id === id);
+      targetSelect.hidden = kind !== 'p';
+      tropeHint.textContent = trope ? `${trope.description}${Object.keys(trope.pace ?? {}).length ? ` Темп: ${paceText(trope.pace)}.` : ''}` : '';
+    };
+    tropeSelect.addEventListener('change', describeTrope);
+    describeTrope();
     const applyTrope = button('Применить троп', 'btn', () => {
       try {
-        const result = facade.invoke('onTriangleTropeFactors', { id: triangle.id, tropeId: tropeSelect.value });
-        const added = appendUniqueFactors(factors, (result?.factors ?? []).filter(factor => lineIds.has(factor.relationshipId)));
-        if (!goal.value.trim() && result?.goal) goal.value = result.goal;
+        const [kind, tropeId] = tropeSelect.value.split(':');
+        const wanted = kind === 'p' && targetSelect.value ? [targetSelect.value] : lines.map(line => line.relationshipId);
+        const skipped = wanted.filter(id => ownTrope(id));
+        const targets = new Set(wanted.filter(id => !ownTrope(id)));
+        let additions = [];
+        let suggestedGoal = '';
+        if (kind === 't') {
+          const result = facade.invoke('onTriangleTropeFactors', { id: triangle.id, tropeId });
+          additions = (result?.factors ?? []).filter(factor => targets.has(factor.relationshipId));
+          suggestedGoal = result?.goal ?? '';
+        } else {
+          const result = facade.invoke('onPairTropeFactors', { tropeId });
+          for (const id of targets) {
+            additions.push(...(result?.factors ?? []).map(factor => ({ ...factor, relationshipId: id, origin: `triangle-trope:${tropeId}` })));
+            paceByLine[id] = { ...(result?.pace ?? {}) };
+          }
+        }
+        // Replace earlier triangle-trope factors on the target lines; hand-written ones stay.
+        const kept = factors.filter(factor => !(targets.has(factor.relationshipId) && factor.origin?.startsWith('triangle-trope:')));
+        factors.splice(0, factors.length, ...kept);
+        const added = appendUniqueFactors(factors, additions);
+        if (!goal.value.trim() && suggestedGoal) goal.value = suggestedGoal;
         renderRows();
-        setSheetStatus(`Добавлено факторов: ${added}${result?.goal && goal.value === result.goal ? ', цель подставлена' : ''}. Проверьте и нажмите «Сохранить».`);
+        renderPace();
+        const skippedNote = skipped.length
+          ? ` Пропущены линии со своим тропом (он важнее): ${skipped.map(id => `${lineLabel(id)} — «${facade.invoke('onTropeLabel', { origin: ownTrope(id) })}»`).join('; ')}. Чтобы сменить им троп, откройте «Факторы роста» линии.`
+          : '';
+        setSheetStatus(`Добавлено факторов: ${added}${suggestedGoal && goal.value === suggestedGoal ? ', цель подставлена' : ''}.${skippedNote} Проверьте и нажмите «Сохранить».`);
       } catch (error) { setSheetStatus(error?.message || 'Не удалось применить троп', true); }
     });
 
@@ -368,9 +431,12 @@ export function createRelationshipStudio(options = {}) {
       setSheetStatus('Генерирую факторы для линий треугольника…');
       try {
         const generated = await facade.invoke('onGenerateTriangleFactors', { id: triangle.id, goal: goal.value.trim() });
-        factors.splice(0, factors.length, ...(generated ?? []).filter(factor => lineIds.has(factor.relationshipId)));
+        // Lines with their own trope keep it untouched; the rest get the generated factors.
+        const protectedLines = new Set(lines.map(line => line.relationshipId).filter(id => ownTrope(id)));
+        const kept = factors.filter(factor => protectedLines.has(factor.relationshipId));
+        factors.splice(0, factors.length, ...kept, ...(generated ?? []).filter(factor => lineIds.has(factor.relationshipId) && !protectedLines.has(factor.relationshipId)));
         renderRows();
-        setSheetStatus(`Сгенерировано факторов: ${factors.length}. Проверьте и нажмите «Сохранить».`);
+        setSheetStatus(`Сгенерировано факторов: ${factors.length - kept.length}${protectedLines.size ? `; линии со своим тропом не тронуты: ${protectedLines.size}` : ''}. Проверьте и нажмите «Сохранить».`);
       } catch (error) { setSheetStatus(error?.message || 'Не удалось сгенерировать факторы', true); }
       finally { generateFactors.disabled = false; }
     });
@@ -379,7 +445,7 @@ export function createRelationshipStudio(options = {}) {
       save.disabled = true;
       try {
         await facade.invoke('onSetTriangleGoal', { id: triangle.id, goal: goal.value });
-        await facade.invoke('onSetTriangleFactors', { id: triangle.id, factors: factors.filter(factor => String(factor.text ?? '').trim()) });
+        await facade.invoke('onSetTriangleFactors', { id: triangle.id, factors: factors.filter(factor => String(factor.text ?? '').trim()), paceByLine });
         setStatus('Треугольник сохранён');
         closeFactors();
       } catch (error) {
@@ -394,10 +460,12 @@ export function createRelationshipStudio(options = {}) {
       goal,
       element('div', { className: 'factors-generate-row', style: { marginTop: '6px' } }, [wish, generateGoal]),
       element('h4', { className: 'sheet-section', text: 'Готовый троп' }),
-      element('div', { className: 'factors-generate-row' }, [tropeSelect, applyTrope]),
+      element('p', { className: 'muted', style: { fontSize: '11px', margin: '0 0 6px' }, text: 'Троп треугольника расписан по ролям сразу на все линии. Троп линии можно поставить на все линии или на одну. Линии, у которых в карточке уже стоит свой троп, пропускаются — он важнее.' }),
+      element('div', { className: 'factors-generate-row' }, [tropeSelect, targetSelect, applyTrope]),
+      tropeHint,
       element('h4', { className: 'sheet-section', text: 'Факторы по линиям' }),
       element('p', { className: 'muted', style: { fontSize: '11px', margin: '0 0 8px' }, text: 'Это те же факторы, что и в окне «Факторы роста» каждой линии: здесь они собраны для всего треугольника.' }),
-      list, addRow,
+      list, addRow, paceBox,
       element('div', { className: 'factors-generate' }, [
         element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Автогенерация учитывает конечную точку, лор подключённых книг и общие сцены троих.' }),
         generateFactors,
@@ -406,6 +474,30 @@ export function createRelationshipStudio(options = {}) {
     );
     sheet.append(head, body, element('div', { className: 'factors-foot' }, [save, close]));
     return sheet;
+  }
+
+  function scaleLabel(scaleId) {
+    return metricDefinitions(snapshot).find(definition => definition.key === scaleId)?.label ?? scaleId;
+  }
+
+  function paceText(pace) {
+    return Object.entries(pace ?? {}).map(([scaleId, value]) => `${scaleLabel(scaleId).toLocaleLowerCase('ru-RU')} — ${value === 'slow' ? 'медленно' : 'быстро'}`).join(', ');
+  }
+
+  /** "Pace: …" line with a reset button; empty when the line has no pace. */
+  function paceControls(pace, onReset, prefix = 'Темп') {
+    if (!Object.keys(pace ?? {}).length) return [];
+    return [
+      element('span', { text: `${prefix}: ${paceText(pace)}. «Медленно» — не больше ±2 за ответ, «быстро» — изменения ×1,5.` }),
+      button('Сбросить темп', 'btn', onReset),
+    ];
+  }
+
+  /** Small note under a factor that came from a trope. */
+  function originBadge(factor) {
+    if (!factor.origin) return null;
+    const label = facade.invoke('onTropeLabel', { origin: factor.origin }) || 'троп';
+    return element('span', { className: 'factor-origin', text: factor.origin.startsWith('pair-trope:') ? `троп линии: ${label}` : `троп треугольника: ${label}` });
   }
 
   /** Append factors that are not in the list yet (same line, scale, direction and text). Returns how many were added. */
@@ -425,6 +517,7 @@ export function createRelationshipStudio(options = {}) {
   function renderFactorsDialog(pair) {
     const sheet = element('div', { className: 'factors-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Факторы роста' });
     const factors = [...(pair.factors ?? [])].map(factor => ({ ...factor }));
+    let pace = { ...(pair.pace ?? {}) };
     const head = element('div', { className: 'factors-head' }, [
       element('h3', { text: `Факторы роста: ${pairLabel(snapshot, pair)}` }),
     ]);
@@ -451,11 +544,15 @@ export function createRelationshipStudio(options = {}) {
         list.append(element('div', { className: 'factor-row' }, [
           element('div', { className: 'factor-controls' }, [scale, direction, remove]),
           text,
-        ]));
+          originBadge(factor),
+        ].filter(Boolean)));
       });
       if (!factors.length) list.append(element('p', { className: 'muted', text: 'Факторов пока нет.' }));
     }
     renderRows();
+    const paceBox = element('div', { className: 'pace-box' });
+    const renderPace = () => paceBox.replaceChildren(...paceControls(pace, () => { pace = {}; renderPace(); }));
+    renderPace();
 
     const addRow = button('+ Добавить фактор', 'btn', () => {
       factors.push({ scaleId: metricDefinitions(snapshot, pair)[0]?.key ?? 'trust', direction: 'up', text: '' });
@@ -493,6 +590,7 @@ export function createRelationshipStudio(options = {}) {
         await facade.invoke('onSetFactors', {
           sourceId: pairSource(pair), targetId: pairTarget(pair),
           factors: factors.filter(factor => String(factor.text ?? '').trim()),
+          pace,
         });
         emit('factors-save', {});
         setStatus('Факторы сохранены');
@@ -503,22 +601,38 @@ export function createRelationshipStudio(options = {}) {
     });
     const close = button('Закрыть', 'btn factors-close', closeFactors);
 
-    // Ready-made tropes: prewritten factors, no model request; appended to the list for review.
+    // Ready-made tropes: prewritten factors, no model request. A line's own trope replaces
+    // factors of any previous trope (its own or a triangle's); hand-written ones stay.
+    const tropes = facade.invoke('onPairTropes', {}) ?? [];
     const tropeSelect = element('select', { 'aria-label': 'Готовый троп' });
-    for (const trope of facade.invoke('onPairTropes', {}) ?? []) tropeSelect.append(element('option', { value: trope.id, text: trope.label }));
-    const addTrope = button('Добавить факторы тропа', 'btn', () => {
+    for (const trope of tropes) tropeSelect.append(element('option', { value: trope.id, text: trope.label }));
+    const tropeHint = element('p', { className: 'muted trope-hint' });
+    const describeTrope = () => {
+      const trope = tropes.find(item => item.id === tropeSelect.value);
+      tropeHint.textContent = trope ? `${trope.description}${Object.keys(trope.pace ?? {}).length ? ` Темп: ${paceText(trope.pace)}.` : ''}` : '';
+    };
+    tropeSelect.addEventListener('change', describeTrope);
+    describeTrope();
+    const addTrope = button('Поставить троп', 'btn', () => {
       try {
-        const added = appendUniqueFactors(factors, facade.invoke('onPairTropeFactors', { tropeId: tropeSelect.value }) ?? []);
+        const result = facade.invoke('onPairTropeFactors', { tropeId: tropeSelect.value });
+        const kept = factors.filter(factor => !factor.origin);
+        const replaced = factors.length - kept.length;
+        factors.splice(0, factors.length, ...kept);
+        const added = appendUniqueFactors(factors, result?.factors ?? []);
+        pace = { ...(result?.pace ?? {}) };
         renderRows();
-        setSheetStatus(added ? `Добавлено факторов: ${added}. Проверьте и нажмите «Сохранить».` : 'Все факторы этого тропа уже в списке.');
-      } catch (error) { setSheetStatus(error?.message || 'Не удалось добавить троп', true); }
+        renderPace();
+        setSheetStatus(`Добавлено факторов: ${added}${replaced ? `, факторы прежнего тропа убраны: ${replaced}` : ''}. Ручные факторы сохранены. Проверьте и нажмите «Сохранить».`);
+      } catch (error) { setSheetStatus(error?.message || 'Не удалось поставить троп', true); }
     });
 
     body.append(
-      list, addRow,
+      list, addRow, paceBox,
       element('div', { className: 'factors-generate' }, [
-        element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Готовый троп: заранее прописанные факторы без запроса к модели — добавляются к списку.' }),
+        element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Готовый троп: заранее прописанные факторы без запроса к модели. Заменяет факторы прежнего тропа, ручные остаются. Троп линии важнее тропа треугольника.' }),
         element('div', { className: 'factors-generate-row' }, [tropeSelect, addTrope]),
+        tropeHint,
       ]),
       element('div', { className: 'factors-generate' }, [
         element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Автогенерация: учитывает лор подключённых книг и сцены с обоими персонажами. «Своё направление» — впишите текстом.' }),

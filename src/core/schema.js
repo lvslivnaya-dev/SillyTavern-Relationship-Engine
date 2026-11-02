@@ -112,6 +112,10 @@ export function validateState(state) {
     if (relation?.hiddenScales != null && (!Array.isArray(relation.hiddenScales) || relation.hiddenScales.some(scaleId => !scaleIds.has(scaleId)))) {
       errors.push(`Relationship ${id} hiddenScales must list known scales`);
     }
+    if (relation?.pace != null && (typeof relation.pace !== 'object' || Array.isArray(relation.pace)
+      || Object.entries(relation.pace).some(([scaleId, value]) => !scaleIds.has(scaleId) || (value !== 'fast' && value !== 'slow')))) {
+      errors.push(`Relationship ${id} pace must map known scales to fast or slow`);
+    }
     if (relation?.factors != null) {
       if (!Array.isArray(relation.factors)) errors.push(`Relationship ${id} factors must be an array`);
       else for (const factor of relation.factors) {

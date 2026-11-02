@@ -44,3 +44,62 @@ test('triangle goal reaches the runtime prompt with a do-not-rush rule', () => {
   assert.match(text, /long-term end point: C выбирает A — a distant direction/);
   assert.match(text, /never rush/);
 });
+
+test('new tropes: united front, fast passion, body first, both sides of violence', async () => {
+  const { pairTropePace } = await import('../src/integration/tropes.js');
+  const ids = pairTropes().map(trope => trope.id);
+  for (const id of ['fast-passion', 'body-first', 'violence-victim', 'violence-aggressor']) assert.ok(ids.includes(id), id);
+  assert.deepEqual(pairTropePace('body-first', SCALES), { attraction: 'fast', love: 'slow', trust: 'slow', affection: 'slow' });
+  assert.equal(pairTropePace('fast-passion', SCALES).love, 'fast');
+  assert.ok(pairTropes().every(trope => trope.description.length > 20), 'у каждого тропа есть описание');
+  const united = triangleTropeFactors('united-front', TRIANGLE, SCALES).factors;
+  assert.ok(united.some(factor => factor.from === 'a' && factor.to === 'b' && factor.scaleId === 'jealousy' && factor.direction === 'down'));
+  assert.ok(!united.some(factor => factor.scaleId === 'jealousy' && factor.direction === 'up'), 'никакой ревности между сторонами');
+});
+
+test('pace: slow caps, fast amplifies, spills respect slow scales, rollback undoes it', async () => {
+  const { applyAnalysisResult, pacedDelta } = await import('../src/integration/analysis-operations.js');
+  const { parseAnalysis } = await import('../src/integration/analyzer.js');
+  const { rollbackMessage } = await import('../src/core/index.js');
+  assert.equal(pacedDelta(7, 'slow'), 2);
+  assert.equal(pacedDelta(-7, 'slow'), -2);
+  assert.equal(pacedDelta(6, 'fast'), 9);
+  assert.equal(pacedDelta(20, 'fast'), 25);
+  assert.equal(pacedDelta(5, undefined), 5);
+  let state = applyOperations(createDefaultState(), [
+    createOperation('entity.upsert', { id: 'a', name: 'A' }),
+    createOperation('entity.upsert', { id: 'b', name: 'B' }),
+    createOperation('relationship.upsert', { from: 'a', to: 'b' }),
+  ]);
+  const id = Object.keys(state.relationships)[0];
+  state = applyOperations(state, [createOperation('factors.set', { relationshipId: id, factors: [], pace: { attraction: 'fast', love: 'slow', affection: 'slow' } })]);
+  const result = parseAnalysis(JSON.stringify({ operations: [
+    { subjectId: 'a', objectId: 'b', metric: 'attraction', delta: 6, reason: 'Близость' },
+    { subjectId: 'a', objectId: 'b', metric: 'love', delta: 8, reason: 'Признание' },
+  ] }));
+  const applied = applyAnalysisResult(state, result, { messageId: '9' }).state;
+  const scales = applied.relationships[id].scales;
+  assert.equal(scales.attraction, 9, 'быстро: 6 × 1,5');
+  assert.equal(scales.love, 2, 'медленно: не больше 2');
+  assert.ok(Math.abs(scales.affection) <= 2, 'связанная шкала с медленным темпом тоже ограничена');
+  assert.equal(rollbackMessage(applied, '9').relationships[id].scales.attraction, 0);
+});
+
+test('factor origin and pace survive the journal; an unknown origin is dropped', () => {
+  let state = applyOperations(createDefaultState(), [
+    createOperation('entity.upsert', { id: 'a', name: 'A' }),
+    createOperation('entity.upsert', { id: 'b', name: 'B' }),
+    createOperation('relationship.upsert', { from: 'a', to: 'b' }),
+  ]);
+  const id = Object.keys(state.relationships)[0];
+  state = applyOperations(state, [createOperation('factors.set', { relationshipId: id, pace: { love: 'slow', ghost: 'fast' }, factors: [
+    { scaleId: 'trust', direction: 'up', text: 'Тропный', origin: 'pair-trope:slowburn' },
+    { scaleId: 'trust', direction: 'down', text: 'Странный', origin: '<script>' },
+  ] })]);
+  const relation = state.relationships[id];
+  assert.equal(relation.factors[0].origin, 'pair-trope:slowburn');
+  assert.equal(relation.factors[1].origin, undefined);
+  assert.deepEqual(relation.pace, { love: 'slow' });
+  state = applyOperations(state, [createOperation('factors.set', { relationshipId: id, factors: relation.factors })]);
+  assert.deepEqual(state.relationships[id].pace, { love: 'slow' }, 'без pace в операции темп не сбрасывается');
+});

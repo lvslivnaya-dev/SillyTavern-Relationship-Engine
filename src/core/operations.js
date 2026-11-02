@@ -8,7 +8,10 @@ const TYPES = new Set([
   'memory.add', 'memory.remove', 'tension.add', 'tension.remove', 'stage.set', 'scales.hide', 'record.update',
 ]);
 
-/** Normalize and bound a growth-factor list: { scaleId, direction: up|down, text }. */
+/** Where a factor came from: a line's own trope outranks a triangle's trope. */
+const FACTOR_ORIGIN = /^(pair-trope|triangle-trope):[a-z0-9-]{1,40}$/;
+
+/** Normalize and bound a growth-factor list: { scaleId, direction: up|down, text, origin? }. */
 export function normalizeFactors(factors, state) {
   if (!Array.isArray(factors)) throw new TypeError('factors must be an array');
   const seen = new Set();
@@ -22,9 +25,18 @@ export function normalizeFactors(factors, state) {
     const key = `${scaleId}\u0000${direction}\u0000${text.toLocaleLowerCase('ru-RU')}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    result.push({ scaleId, direction, text });
+    const origin = typeof factor.origin === 'string' && FACTOR_ORIGIN.test(factor.origin) ? factor.origin : null;
+    result.push(origin ? { scaleId, direction, text, origin } : { scaleId, direction, text });
   }
   return result;
+}
+
+/** Per-scale pace of a line: { scaleId: 'fast' | 'slow' }; unknown scales and values are dropped. */
+export function normalizePace(pace, state) {
+  if (pace == null) return {};
+  if (typeof pace !== 'object' || Array.isArray(pace)) throw new TypeError('pace must be an object');
+  const known = new Set(state.config.scales.map(scale => scale.id));
+  return Object.fromEntries(Object.entries(pace).filter(([scaleId, value]) => known.has(scaleId) && (value === 'fast' || value === 'slow')));
 }
 
 function clone(value) {
@@ -141,6 +153,11 @@ function applyMutation(next, operation) {
     case 'factors.set': {
       const relation = relationshipFor(next, payload);
       relation.factors = normalizeFactors(payload.factors, next);
+      // Pace is optional in the payload: older operations without it leave the line's pace alone.
+      if (Object.hasOwn(payload, 'pace')) {
+        const pace = normalizePace(payload.pace, next);
+        if (Object.keys(pace).length) relation.pace = pace; else delete relation.pace;
+      }
       break;
     }
     case 'relationship.remove': {

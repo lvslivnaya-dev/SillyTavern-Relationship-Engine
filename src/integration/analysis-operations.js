@@ -5,6 +5,17 @@ function normalizedName(value) {
   return String(value ?? '').trim().toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
 }
 
+const SLOW_LIMIT = 2;
+const FAST_FACTOR = 1.5;
+
+/** A line's pace for one scale, set by a trope: slow caps a change, fast amplifies it. */
+export function pacedDelta(delta, pace) {
+  const value = Number(delta);
+  if (pace === 'slow') return Math.sign(value) * Math.min(SLOW_LIMIT, Math.abs(value));
+  if (pace === 'fast') return Math.sign(value) * Math.min(25, Math.round(Math.abs(value) * FAST_FACTOR));
+  return value;
+}
+
 /** Human-readable list of proposed scale changes for the confirmation popup.
  * Operations may reference characters by registry ID or by scene name. */
 export function describeProposedChanges(state, operations, threshold) {
@@ -100,13 +111,18 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
     evidenced.get(change.id).add(change.metric);
   }
   for (const change of resolved) {
-    add('scale.delta', { relationshipId: change.id, scaleId: change.metric, value: change.delta }, change.reason);
+    const pace = next.relationships[change.id].pace ?? {};
+    const delta = pacedDelta(change.delta, pace[change.metric]);
+    if (!delta) continue;
+    const paceNote = delta !== change.delta ? ` (темп: ${pace[change.metric] === 'slow' ? 'медленно' : 'быстро'}, ${change.delta > 0 ? '+' : ''}${change.delta} → ${delta > 0 ? '+' : ''}${delta})` : '';
+    add('scale.delta', { relationshipId: change.id, scaleId: change.metric, value: delta }, `${change.reason}${paceNote}`);
     if (options.linkedScales === false) continue;
     const hidden = new Set(next.relationships[change.id].hiddenScales ?? []);
     const available = new Set(next.config.scales.map(scale => scale.id).filter(scaleId => !hidden.has(scaleId)));
-    for (const spill of coupledDeltas(change.metric, change.delta, available, evidenced.get(change.id))) {
-      add('scale.delta', { relationshipId: change.id, scaleId: spill.scaleId, value: spill.value },
-        `Связанная шкала (${change.metric} ${change.delta > 0 ? '+' : ''}${change.delta})`);
+    for (const spill of coupledDeltas(change.metric, delta, available, evidenced.get(change.id))) {
+      const value = pace[spill.scaleId] === 'slow' ? Math.sign(spill.value) * Math.min(SLOW_LIMIT, Math.abs(spill.value)) : spill.value;
+      add('scale.delta', { relationshipId: change.id, scaleId: spill.scaleId, value },
+        `Связанная шкала (${change.metric} ${delta > 0 ? '+' : ''}${delta})`);
     }
   }
   for (const [collection, type] of [['memories', 'memory.add'], ['tensions', 'tension.add']]) {

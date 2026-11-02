@@ -18,7 +18,7 @@ import { createHistoryBatches, rebuildWithoutAutomaticHistory, historyFingerprin
 import { applyAnalysisResult, describeProposedChanges } from './src/integration/analysis-operations.js';
 import { loadLinkedLore, analyzeLorebookCharacters, canonKeys, namesMatch } from './src/integration/lorebooks.js';
 import { generateGrowthFactors, directionPresets, generateTriangleFactors, generateTriangleGoal } from './src/integration/growth.js';
-import { pairTropeFactors, pairTropes, triangleTropeFactors, triangleTropes } from './src/integration/tropes.js';
+import { pairTropeFactors, pairTropePace, pairTropes, triangleTropeFactors, triangleTropes, tropeLabel } from './src/integration/tropes.js';
 import { getAnalysisTokenUsage } from './src/integration/analyzer.js';
 import { onChangeBusy, getBusy, resetBusy } from './src/integration/busy.js';
 import { clearLog, formatLog, logEvent } from './src/integration/diagnostics.js';
@@ -646,10 +646,11 @@ export async function init() {
     onTriangleTropeFactors: ({ id, tropeId }) => {
       const triangle = findTriangle(id);
       const result = triangleTropeFactors(tropeId, triangle, state.config.scales.map(scale => scale.id), state.ui?.personaId || '');
-      return { goal: result.goal, factors: withLineIds(result.factors) };
+      return { goal: result.goal, factors: withLineIds(result.factors).map(factor => ({ ...factor, origin: `triangle-trope:${tropeId}` })) };
     },
-    /** Saves the combined editor: every tracked line of the triangle gets exactly the listed factors. */
-    onSetTriangleFactors: async ({ id, factors }) => {
+    /** Saves the combined editor: every tracked line of the triangle gets exactly the listed factors
+     * (and, when given, the listed pace). */
+    onSetTriangleFactors: async ({ id, factors, paceByLine }) => {
       const triangle = findTriangle(id);
       let next = state;
       for (const line of triangleLines(triangle)) {
@@ -661,12 +662,21 @@ export async function init() {
       next = applyOperations(next, triangleLines(triangle).map(line => createOperation('factors.set', {
         relationshipId: line.relationshipId,
         factors: (factors ?? []).filter(factor => factor.relationshipId === line.relationshipId && String(factor.text ?? '').trim())
-          .map(({ scaleId, direction, text }) => ({ scaleId, direction, text })),
+          .map(({ scaleId, direction, text, origin }) => ({ scaleId, direction, text, ...(origin ? { origin } : {}) })),
+        ...(paceByLine && Object.hasOwn(paceByLine, line.relationshipId) ? { pace: paceByLine[line.relationshipId] } : {}),
       }, meta)));
       await commit(next, true);
     },
     onPairTropes: () => pairTropes(),
-    onPairTropeFactors: ({ tropeId }) => pairTropeFactors(tropeId, state.config.scales.map(scale => scale.id)),
+    /** origin marks a line's own trope; the triangle editor re-labels it as a triangle trope. */
+    onPairTropeFactors: ({ tropeId }) => {
+      const scaleIds = state.config.scales.map(scale => scale.id);
+      return {
+        factors: pairTropeFactors(tropeId, scaleIds).map(factor => ({ ...factor, origin: `pair-trope:${tropeId}` })),
+        pace: pairTropePace(tropeId, scaleIds),
+      };
+    },
+    onTropeLabel: ({ origin }) => tropeLabel(origin),
     onRefreshLorebooks: () => notify(),
     onLinkLorebook: async ({ name }) => {
       if (!(SillyTavern.getContext().getWorldInfoNames?.() ?? []).includes(name)) throw new Error('Лорбук не найден. Обновите список.');
@@ -685,11 +695,11 @@ export async function init() {
     },
     onAddCharacter: addCharacter,
     onSelectPair: selectPair,
-    onSetFactors: async ({ sourceId, targetId, factors }) => {
+    onSetFactors: async ({ sourceId, targetId, factors, pace }) => {
       const id = relationshipId(sourceId, targetId);
       if (!state.relationships[id]) throw new Error('Линия не найдена.');
       await commit(applyOperation(state, createOperation('factors.set', {
-        relationshipId: id, factors,
+        relationshipId: id, factors, ...(pace !== undefined ? { pace } : {}),
       }, { transactionId: uniqueId('manual'), reason: 'Ручное изменение факторов', timestamp: new Date().toISOString() })), true);
     },
     onGenerateFactors: async ({ sourceId, targetId, directionId, customDirection, replace }) => {
