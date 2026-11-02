@@ -86,3 +86,17 @@ test('scene fallback: only pairs whose members appear in recent messages (person
   const both = selectHeadcanons(state, { score: mentionScorer(state, recentSceneText(chat, 2)) });
   assert.equal(both.length, 2);
 });
+
+test('semantic ranking: meaning wins, presence only nudges, threshold cuts', async () => {
+  const { semanticScorer } = await import('../src/integration/headcanon-retrieval.js');
+  const { cosine } = await import('../src/integration/embeddings.js');
+  assert.equal(cosine([1, 0], [1, 0]), 1);
+  assert.equal(cosine([1, 0], [0, 1]), 0);
+  const state = setup();
+  state.ui.headcanons = addHeadcanons(state, headcanonKey('a', 'b'), ['Близкий по смыслу']).headcanons;
+  state.ui.headcanons = addHeadcanons({ ...state }, headcanonKey('a', 'p'), ['Далёкий, но персона рядом']).headcanons;
+  const similarity = item => (item.text.startsWith('Близкий') ? 0.83 : 0.80);
+  const lines = selectHeadcanons(state, { score: semanticScorer(state, 'Ева одна дома.', similarity) });
+  assert.equal(lines[0], 'headcanon[Анна & Леон]: Близкий по смыслу', 'смысл важнее присутствия');
+  assert.equal(selectHeadcanons(state, { score: semanticScorer(state, '', similarity, 0.82) }).length, 1, 'порог отсекает далёкие');
+});

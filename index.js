@@ -34,7 +34,8 @@ import { AUX_PURPOSES, auxGenerate, fetchAuxModels, listAuxProfiles, routedConte
 import { triangleEdges } from './src/core/records.js';
 import { mountExtensionShell } from './src/integration/shell.js';
 import { mountMessageButtons } from './src/integration/message-buttons.js';
-import { mentionScorer, recentSceneText } from './src/integration/headcanon-retrieval.js';
+import { mentionScorer, recentSceneText, semanticScorer } from './src/integration/headcanon-retrieval.js';
+import { LOCAL_MODELS, cosine, embedTexts } from './src/integration/embeddings.js';
 import { createChatStorage } from './src/integration/storage.js';
 import { createRelationshipStudio } from './src/ui/studio.js';
 import { createRelationshipWidget } from './src/ui/widget.js';
@@ -43,6 +44,19 @@ const MESSAGE_EXTRA_KEY = 'relationshipEngineV1';
 /** Plain on/off preferences edited as checkboxes in the Studio settings. */
 const TOGGLE_SETTINGS = ['linkedScales', 'autoCharacterLines', 'confirmPersonaLines', 'sendMemories', 'sendTensions', 'sendFactors', 'sendHeadcanons', 'autoHeadcanons'];
 let controller = null;
+
+function normalizeEmbeddings(config) {
+  return {
+    mode: ['off', 'local', 'api'].includes(config?.mode) ? config.mode : 'off',
+    localModel: String(config?.localModel || 'Xenova/multilingual-e5-small'),
+    dtype: config?.dtype === 'q4' ? 'q4' : 'q8',
+    format: config?.format === 'gemini' ? 'gemini' : 'openai',
+    url: String(config?.url ?? '').trim().slice(0, 500),
+    key: String(config?.key ?? '').trim().slice(0, 500),
+    model: String(config?.model ?? '').trim().slice(0, 200),
+    threshold: Math.max(0, Math.min(0.95, Number(config?.threshold) || 0)),
+  };
+}
 
 function normalizeAux(aux) {
   const mode = ['off', 'profile', 'custom'].includes(aux?.mode) ? aux.mode : 'off';
@@ -112,6 +126,7 @@ export async function init() {
         maxPromptCharacters: settings.maxPromptCharacters,
         headcanonLimit: settings.headcanonLimit,
         aux: structuredClone(settings.aux),
+        embeddings: structuredClone(settings.embeddings),
         ...Object.fromEntries(TOGGLE_SETTINGS.map(key => [key, settings[key] !== false])),
       },
       widget: {
@@ -215,12 +230,13 @@ export async function init() {
         return;
       }
       const sceneText = recentSceneText(chat);
+      const { score, method, note } = await headcanonScorer(sceneText);
       sceneHeadcanons = selectHeadcanons(state, {
-        score: await headcanonScorer(sceneText),
+        score,
         limit: Math.max(1, Math.min(30, Number(settings.headcanonLimit) || 8)),
         maxCharacters: 1500,
       });
-      headcanonInfo = { enabled, picked: sceneHeadcanons.length, method: 'mentions', disabled: false };
+      headcanonInfo = { enabled, picked: sceneHeadcanons.length, method, disabled: false, ...(note ? { note } : {}) };
     } catch (error) {
       logEvent('error', 'Не удалось отобрать хедканоны для сцены', error);
       sceneHeadcanons = [];
@@ -228,9 +244,33 @@ export async function init() {
     }
   }
 
-  /** Mention-based ranking for now; the semantic one plugs in here when embeddings are on. */
+  const EMBEDDING_WAIT_MS = 8000;
+
+  /**
+   * Semantic ranking when embeddings are on; mentions otherwise. A slow first
+   * model download must not hold the generation: after EMBEDDING_WAIT_MS this
+   * generation falls back to mentions while the vectors keep loading.
+   */
   async function headcanonScorer(sceneText) {
-    return mentionScorer(state, sceneText);
+    const config = settings.embeddings ?? {};
+    if (config.mode !== 'local' && config.mode !== 'api') return { score: mentionScorer(state, sceneText), method: 'mentions' };
+    const items = listHeadcanonPairs(state).flatMap(pair => pair.items.filter(item => item.enabled !== false));
+    const work = (async () => {
+      const [sceneVector] = await embedTexts(config, [sceneText.slice(-1500) || ' '], 'query');
+      const vectors = await embedTexts(config, items.map(item => item.text), 'passage');
+      const byId = new Map(items.map((item, index) => [item.id, vectors[index]]));
+      return item => (byId.has(item.id) ? cosine(sceneVector, byId.get(item.id)) : null);
+    })();
+    work.catch(error => logEvent('warn', 'Смысловой поиск хедканонов не сработал', error));
+    try {
+      const similarity = await Promise.race([work, new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), EMBEDDING_WAIT_MS))]);
+      return { score: semanticScorer(state, sceneText, similarity, Number(config.threshold) || 0), method: 'semantic' };
+    } catch (error) {
+      const note = error?.message === 'timeout'
+        ? 'Модель эмбеддингов ещё загружается — на эту генерацию отбор по упоминаниям.'
+        : `Смысловой поиск недоступен (${error?.message ?? error}) — отбор по упоминаниям.`;
+      return { score: mentionScorer(state, sceneText), method: 'mentions', note };
+    }
   }
 
   function refreshPrompt() {
@@ -373,6 +413,10 @@ export async function init() {
       if (Number.isFinite(limit)) settings.headcanonLimit = Math.max(1, Math.min(30, limit));
     }
     if (patch.aux && typeof patch.aux === 'object') settings.aux = normalizeAux({ ...settings.aux, ...patch.aux });
+    if (patch.embeddings && typeof patch.embeddings === 'object') {
+      settings.embeddings = normalizeEmbeddings({ ...settings.embeddings, ...patch.embeddings });
+      prepareHeadcanons().then(refreshPrompt);
+    }
     context.saveSettingsDebounced();
     widget.element.hidden = !settings.widget.visible;
     refreshPrompt();
@@ -1005,11 +1049,23 @@ export async function init() {
       'Инъекция': settings.enabled && settings.injectPrompt ? 'вкл' : 'выкл',
       // Never the key or the URL: only which mode is used.
       'Вспомогательный API': settings.aux?.mode === 'profile' ? 'профиль подключения' : settings.aux?.mode === 'custom' ? 'свой URL' : 'выкл',
+      'Эмбеддинги': settings.embeddings?.mode === 'local' ? `локально (${settings.embeddings.localModel}, ${settings.embeddings.dtype})` : settings.embeddings?.mode === 'api' ? `API (${settings.embeddings.format})` : 'выкл',
       'Персонажей / линий': `${Object.keys(state.entities).length} / ${Object.keys(state.relationships).length}`,
     }),
     onClearDiagnostics: () => { clearLog(); notify(); },
     onRefreshScene: async () => { await prepareHeadcanons(); refreshPrompt(); },
     onAuxProfiles: () => listAuxProfiles(SillyTavern.getContext()),
+    onLocalEmbeddingModels: () => Object.entries(LOCAL_MODELS).map(([id, model]) => ({ id, label: model.label })),
+    /** Embeds two short texts with the settings being edited; the first local run downloads the model. */
+    onTestEmbeddings: async ({ embeddings }) => {
+      const config = normalizeEmbeddings({ ...settings.embeddings, ...embeddings });
+      if (config.mode === 'off') throw new Error('Смысловой поиск выключен.');
+      const started = Date.now();
+      const [scene, fact] = await embedTexts(config, ['Они вместе идут домой под дождём', 'Он всегда провожает её до дома'], 'passage');
+      const seconds = ((Date.now() - started) / 1000).toFixed(1);
+      logEvent('info', `Проверка эмбеддингов: ${scene.length} измерений за ${seconds} с`);
+      return `Работает: вектор из ${scene.length} чисел за ${seconds} с, сходство примера ${cosine(scene, fact).toFixed(2)}.`;
+    },
     onAuxPurposes: () => ({ ...AUX_PURPOSES }),
     onFetchAuxModels: ({ url, key }) => fetchAuxModels(SillyTavern.getContext(), url, key),
     /** A tiny request with the settings being edited (not yet saved). */

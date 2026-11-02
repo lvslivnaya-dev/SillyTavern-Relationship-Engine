@@ -39,14 +39,18 @@ export function mentionScorer(state, sceneText) {
 
 /**
  * Semantic ranking. similarity(item) is the cosine similarity of the fact to the
- * scene (or null when its vector is missing); presence of both members adds 0.1.
+ * scene (or null when its vector is missing). e5-style models put almost every
+ * pair of texts near 0.8 and relevant ones only ~0.05 higher, so presence of
+ * both members adds just a nudge (PRESENCE_BONUS), never more than meaning.
  */
-export function semanticScorer(state, sceneText, similarity, threshold = 0.2) {
+const PRESENCE_BONUS = 0.03;
+
+export function semanticScorer(state, sceneText, similarity, threshold = 0) {
   const present = mentionedEntities(state, sceneText);
   return (item, pair) => {
     const value = similarity(item);
-    if (value == null) return 0;
-    const bonus = pair.ids.every(id => present.has(id)) ? 0.1 : 0;
-    return value >= threshold ? value + bonus : 0;
+    if (value == null || value < threshold) return 0;
+    // Keep scores positive: selectHeadcanons skips anything <= 0.
+    return Math.max(1e-6, value + (pair.ids.every(id => present.has(id)) ? PRESENCE_BONUS : 0));
   };
 }

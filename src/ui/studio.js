@@ -1589,7 +1589,7 @@ export function createRelationshipStudio(options = {}) {
     preview.append(element('p', { className: 'muted', style: { fontSize: '11px' }, text: `Инъекция Narrator: ~${snapshot.promptTokens ?? 0} токенов. Анализ за сессию израсходовал ~${snapshot.analysisTokens ?? 0} токенов (запросы + ответы, включая размышления, если модель их возвращает). Пусто — проверьте, что связь не исключена персоной и значения не нулевые.` }));
     preview.append(...renderPromptSections(snapshot.promptPreview || ''));
     const wrapper = element('div');
-    wrapper.append(form, renderAuxApi(), renderDataTransfer(), preview, renderDiagnostics());
+    wrapper.append(form, renderAuxApi(), renderEmbeddings(), renderDataTransfer(), preview, renderDiagnostics());
     return wrapper;
   }
 
@@ -1626,7 +1626,71 @@ export function createRelationshipStudio(options = {}) {
     if (info.disabled) return 'Отправка хедканонов выключена в настройках.';
     if (!info.enabled) return 'Включённых хедканонов нет.';
     if (info.error) return `Не удалось подобрать: ${info.error}`;
-    return `Включено: ${info.enabled}, подобрано к текущей сцене: ${info.picked}. Отбор: ${info.method === 'semantic' ? 'по смыслу' : 'оба участника пары упомянуты в последних сообщениях (персона — всегда)'}. Подбор обновляется перед каждой генерацией.`;
+    return `Включено: ${info.enabled}, подобрано к текущей сцене: ${info.picked}. Отбор: ${info.method === 'semantic' ? 'по смыслу' : 'оба участника пары упомянуты в последних сообщениях (персона — всегда)'}. Подбор обновляется перед каждой генерацией.${info.note ? ` ${info.note}` : ''}`;
+  }
+
+  /** Semantic choice of headcanons: a model in the browser or an embeddings API. */
+  function renderEmbeddings() {
+    const config = { ...(snapshot.settings?.embeddings ?? {}) };
+    const card = element('div', { className: 'card settings', style: { marginTop: '14px' } }, [
+      element('h3', { text: 'Смысловой поиск хедканонов' }),
+      element('p', { className: 'muted', style: { fontSize: '11px', marginTop: '0' }, text: 'Перед каждой генерацией к сцене подбираются хедканоны, близкие ей по смыслу, — даже если имён в тексте нет. Выключено — подбор по упоминаниям участников пары.' }),
+    ]);
+    const field = (label, control, hint) => element('div', { className: 'field' }, [
+      element('label', { text: label }), control, ...(hint ? [element('p', { className: 'muted', style: { fontSize: '11px', margin: '0' }, text: hint })] : []),
+    ]);
+    const mode = element('select', { 'aria-label': 'Источник эмбеддингов' });
+    for (const [value, text] of [['off', 'Выключен — подбор по упоминаниям'], ['local', 'Локальная модель в браузере'], ['api', 'API эмбеддингов']]) {
+      mode.append(element('option', { value, text, selected: (config.mode || 'off') === value }));
+    }
+    const localModel = element('select', { 'aria-label': 'Локальная модель' });
+    for (const model of facade.invoke('onLocalEmbeddingModels', {}) ?? []) localModel.append(element('option', { value: model.id, text: model.label, selected: model.id === config.localModel }));
+    const dtype = element('select', { 'aria-label': 'Квантизация' });
+    for (const [value, text] of [['q8', 'q8 — рекомендуется, точнее'], ['q4', 'q4 — легче, для слабых устройств']]) dtype.append(element('option', { value, text, selected: (config.dtype || 'q8') === value }));
+    const localBlock = element('div', {}, [
+      field('Модель', localModel, 'Скачивается один раз (~33 МБ для q8) и дальше берётся из кэша браузера; занимает 50–80 МБ памяти. На телефонах с малым объёмом памяти лучше API.'),
+      field('Квантизация', dtype),
+    ]);
+    const format = element('select', { 'aria-label': 'Формат API' });
+    for (const [value, text] of [['openai', 'OpenAI-совместимый (/embeddings)'], ['gemini', 'Gemini (batchEmbedContents)']]) format.append(element('option', { value, text, selected: (config.format || 'openai') === value }));
+    const url = element('input', { type: 'text', value: config.url ?? '', placeholder: 'https://api.openai.com/v1', 'aria-label': 'URL API эмбеддингов' });
+    const key = element('input', { type: 'password', value: config.key ?? '', autocomplete: 'off', 'aria-label': 'Ключ API эмбеддингов' });
+    const reveal = button('👁', 'icon', () => { key.type = key.type === 'password' ? 'text' : 'password'; }, 'Показать или скрыть ключ');
+    const model = element('input', { type: 'text', value: config.model ?? '', placeholder: 'text-embedding-3-small', 'aria-label': 'Модель эмбеддингов' });
+    const apiBlock = element('div', {}, [
+      field('Формат', format, 'Для официального Gemini укажите базовый URL Google Generative Language API: https://generativelanguage.googleapis.com/v1beta'),
+      field('URL API', url),
+      field('Ключ API', element('div', { className: 'row', style: { flexWrap: 'nowrap' } }, [key, reveal]), 'Хранится в настройках расширений SillyTavern. Запрос идёт из браузера; если провайдер его блокирует (CORS), используется CORS-прокси SillyTavern, когда он включён.'),
+      field('Модель', model),
+    ]);
+    const threshold = element('input', { type: 'number', min: 0, max: 0.95, step: 0.05, value: config.threshold ?? 0, 'aria-label': 'Порог сходства' });
+    const commonBlock = element('div', {}, [
+      field('Порог сходства (0 — просто брать самые близкие)', threshold, 'Хедканоны с меньшим сходством со сценой не отправляются. Сколько отправлять — «Сколько хедканонов к сцене» выше.'),
+    ]);
+    const collect = () => ({
+      mode: mode.value, localModel: localModel.value, dtype: dtype.value, format: format.value,
+      url: url.value, key: key.value, model: model.value, threshold: Number(threshold.value),
+    });
+    const sync = () => {
+      localBlock.hidden = mode.value !== 'local';
+      apiBlock.hidden = mode.value !== 'api';
+      commonBlock.hidden = mode.value === 'off';
+    };
+    mode.addEventListener('change', sync);
+    sync();
+    const test = button('Проверить', 'btn', async () => {
+      test.disabled = true;
+      setStatus(mode.value === 'local' ? 'Загружаю модель и считаю пример… первый раз это может занять минуту' : 'Проверяю API эмбеддингов…');
+      try { setStatus(await facade.invoke('onTestEmbeddings', { embeddings: collect() })); }
+      catch (error) { setStatus(error?.message || 'Эмбеддинги не работают', true); }
+      finally { test.disabled = false; }
+    });
+    const save = button('Сохранить', 'btn primary', () => {
+      act('onSettingsChange', { settings: { embeddings: collect() } }, 'settings-change');
+      setStatus('Смысловой поиск сохранён');
+    });
+    card.append(field('Источник', mode), localBlock, apiBlock, commonBlock, element('div', { className: 'row', style: { marginTop: '10px' } }, [save, test]));
+    return card;
   }
 
   /** Auxiliary model for the extension's own requests: a SillyTavern profile or a custom URL. */

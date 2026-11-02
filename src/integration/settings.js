@@ -31,6 +31,17 @@ export const DEFAULT_SETTINGS = Object.freeze({
     fallbackToMain: false,
     purposes: { analysis: true, discovery: true, generation: true },
   },
+  // Semantic choice of headcanons (see embeddings.js); off = pick by mentions.
+  embeddings: {
+    mode: 'off',
+    localModel: 'Xenova/multilingual-e5-small',
+    dtype: 'q8',
+    format: 'openai',
+    url: '',
+    key: '',
+    model: '',
+    threshold: 0,
+  },
   widget: {
     visible: true,
     expanded: false,
