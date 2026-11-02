@@ -72,7 +72,8 @@ export function createRelationshipStudio(options = {}) {
     .triangle-head h3{margin:0}
     .relationship-card>details+details{margin-top:12px;padding-top:12px;border-top:1px solid var(--rs-line)}
     .relationship-card>details>summary{cursor:pointer;font-weight:600;margin-bottom:6px}
-    .pair-swap{justify-self:start}
+    .pair-swap{justify-self:center;width:40px;min-height:36px;padding:4px;font-size:18px;line-height:1}
+    .pair-swap:disabled{opacity:.4;cursor:default}
     .mobile-tools{display:none}
     .sidebar-tools>summary{display:none}
     .factors-layer{position:fixed;left:0;right:0;top:0;height:100%;z-index:2147483001;display:grid;place-items:center;padding:16px;background:rgba(0,0,0,.5)}
@@ -409,7 +410,8 @@ export function createRelationshipStudio(options = {}) {
 
   function renderCharacterManager() {
     const box = element('div', { className: 'card' });
-    const list = element('div', { className: 'characters', style: { display: 'grid', gap: '6px' } });
+    // Several columns on wide screens; narrows down to one on phones by itself.
+    const list = element('div', { className: 'characters', style: { display: 'grid', gap: '6px', gridTemplateColumns: 'repeat(auto-fill,minmax(min(100%,210px),1fr))' } });
     const personaId = snapshot.personaId || snapshot.ui?.personaId || '';
     const removableCharacters = (snapshot.characters || []).filter(character => characterId(character) !== personaId);
     // Drop selections that no longer exist (deleted characters, switched chats).
@@ -498,7 +500,7 @@ export function createRelationshipStudio(options = {}) {
     sourceSelect.select.addEventListener('change', apply);
     targetSelect.select.addEventListener('change', apply);
     // Reverse direction: B → A is a separate line, created on demand like any selected pair.
-    const swap = button('⇅ Поменять местами', 'btn pair-swap', () => {
+    const swap = button('⇅', 'icon pair-swap', () => {
       const from = sourceSelect.select.value;
       const to = targetSelect.select.value;
       if (!from || !to) return;
@@ -509,7 +511,7 @@ export function createRelationshipStudio(options = {}) {
     const targetIsPersona = Boolean(personaId && currentPair && pairTarget(currentPair) === personaId);
     if (!currentPair || targetIsPersona) swap.disabled = true;
     if (targetIsPersona) swap.title = 'Исходящие чувства персоны не отслеживаются';
-    return element('div', { className: 'toolbar', style: { display: 'grid', gap: '8px' } }, [sourceSelect.field, targetSelect.field, swap]);
+    return element('div', { className: 'toolbar', style: { display: 'grid', gap: '8px' } }, [sourceSelect.field, swap, targetSelect.field]);
   }
 
   function characterSelect(label, value, characters) {
