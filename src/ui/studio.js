@@ -39,6 +39,7 @@ export function createRelationshipStudio(options = {}) {
   let openHeadcanonKey = null; // headcanons tab: the pair being viewed ("a|b")
   let editingHeadcanonId = null;
   const promptSectionsOpen = new Set(['lines']); // "What the model gets": open sections
+  let editingAliasesId = null; // character whose aliases are being edited in the overview
   const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
 
   const style = element('style', { text: STYLE + `
@@ -94,6 +95,8 @@ export function createRelationshipStudio(options = {}) {
     .pair-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:14px}
     .pair-card-head h3{margin:0;min-width:0;overflow-wrap:anywhere}
     .pair-flags{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px}
+    .alias-edit{flex:0 0 26px;width:26px;height:26px;min-height:26px;padding:0;font-size:12px;line-height:1;border-radius:6px;display:grid;place-items:center}
+    .alias-editor{grid-column:1/-1;display:grid;gap:6px;padding:10px;border:1px solid var(--rs-accent);border-radius:8px;background:var(--rs-inset)}
     .prompt-section{border-top:1px solid var(--rs-line);padding:8px 0}
     .prompt-section>summary{cursor:pointer;font-weight:600;font-size:13px}
     .prompt-section .btn{min-height:30px;padding:4px 10px;font-size:12px;margin:2px 0 6px}
@@ -781,10 +784,17 @@ export function createRelationshipStudio(options = {}) {
         ? element('img', { className: 'avatar', src: character.avatar || character.avatarUrl, alt: '' })
         : element('span', { className: 'avatar', text: name.slice(0, 1).toUpperCase() });
       const isPersona = characterId(character) === personaId;
-      const characterRow = element('div', { className: 'character', style: rowLayout, title: isPersona ? `${name} — персона этого чата` : name }, [
+      const aliases = character.aliases ?? [];
+      const aliasNote = aliases.length ? `\nПсевдонимы: ${aliases.join(', ')}` : '';
+      const editAliases = button('✎', 'btn icon alias-edit', () => {
+        editingAliasesId = editingAliasesId === characterId(character) ? null : characterId(character);
+        render();
+      }, `Псевдонимы ${name}`);
+      const characterRow = element('div', { className: 'character', style: rowLayout, title: `${isPersona ? `${name} — персона этого чата` : name}${aliasNote}` }, [
         avatar,
         element('span', { style: { flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, text: name }),
         ...(isPersona ? [element('em', { className: 'muted', text: 'персона' })] : []),
+        editAliases,
       ]);
       if (!isPersona) {
         const checkbox = element('input', { type: 'checkbox', 'aria-label': `Выбрать ${name} для удаления` });
@@ -805,6 +815,7 @@ export function createRelationshipStudio(options = {}) {
         characterRow.append(element('span', { style: { flex: '0 0 26px', width: '26px' }, text: '' }));
       }
       list.append(characterRow);
+      if (editingAliasesId === characterId(character)) list.append(renderAliasEditor(character));
     }
     const bulkBar = element('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '0 0 10px' } });
     const allSelected = removableCharacters.length > 0 && selectedForRemoval.size === removableCharacters.length;
@@ -839,6 +850,34 @@ export function createRelationshipStudio(options = {}) {
     });
     box.append(bulkBar, list, addForm);
     return box;
+  }
+
+  /** Aliases of an existing character: other spellings, nicknames, translations (Майки, Mikey…). */
+  function renderAliasEditor(character) {
+    const form = element('form', { className: 'alias-editor' });
+    const input = element('input', { type: 'text', value: (character.aliases ?? []).join(', '), placeholder: 'Через запятую: Майки, Mikey, Sano', 'aria-label': `Псевдонимы ${characterName(character)}` });
+    const save = button('Сохранить', 'btn primary', () => {});
+    save.type = 'submit';
+    form.append(
+      element('label', { className: 'muted', text: `Псевдонимы: ${characterName(character)}` }),
+      input,
+      element('p', { className: 'muted', style: { fontSize: '11px', margin: '0' }, text: 'По псевдонимам анализатор узнаёт персонажа в тексте, а хедканоны подбираются к сцене.' }),
+      element('div', { className: 'row' }, [save, button('Отмена', 'btn', () => { editingAliasesId = null; render(); })]),
+    );
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      try {
+        await facade.invoke('onSetAliases', {
+          characterId: characterId(character),
+          aliases: input.value.split(',').map(value => value.trim()).filter(Boolean),
+        });
+        editingAliasesId = null;
+        setStatus('Псевдонимы сохранены');
+        render();
+      } catch (error) { setStatus(error?.message || 'Не удалось сохранить псевдонимы', true); }
+    });
+    requestAnimationFrame(() => input.focus({ preventScroll: true }));
+    return form;
   }
 
   function pairToolbar(pair) {

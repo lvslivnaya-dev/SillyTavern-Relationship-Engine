@@ -275,6 +275,21 @@ export async function init() {
     await commit(applyOperation(state, createOperation('entity.upsert', entity, { id: uniqueId('entity-update') })), true);
   }
 
+  /** Replace a character's aliases, keeping its ID, name, avatar and source. */
+  async function setAliases({ characterId: id, aliases }) {
+    const existing = state.entities[id];
+    if (!existing) throw new Error('Персонаж не найден.');
+    const entity = createEntity(existing.name, {
+      id, aliases: (aliases ?? []).map(String).map(alias => alias.trim()).filter(alias => alias && alias.length <= 100).slice(0, 30),
+      avatar: existing.avatar, sourceId: existing.sourceId,
+    });
+    await commit(applyOperation(state, createOperation('entity.upsert', entity, {
+      id: uniqueId('entity-update'), reason: 'Псевдонимы персонажа', timestamp: new Date().toISOString(),
+    })), true);
+    await prepareHeadcanons();
+    refreshPrompt();
+  }
+
   function findTriangle(id) {
     const triangle = (state.ui?.triangles ?? []).find(item => item.id === id);
     if (!triangle) throw new Error('Треугольник не найден.');
@@ -779,6 +794,7 @@ export async function init() {
       await commit(next, true);
     },
     onAddCharacter: addCharacter,
+    onSetAliases: setAliases,
     onSelectPair: selectPair,
     onSetFactors: async ({ sourceId, targetId, factors, pace }) => {
       const id = relationshipId(sourceId, targetId);
