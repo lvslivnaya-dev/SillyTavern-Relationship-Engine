@@ -110,6 +110,10 @@
 .re-widget-metric { display: flex; justify-content: space-between; gap: .6rem; }
 .re-toast { position: fixed; z-index: 10030; right: 1rem; bottom: 1rem; max-width: 360px; padding: .75rem 1rem; border-radius: 10px; background: var(--re-panel); border: 1px solid var(--re-border); box-shadow: 0 8px 30px #0009; }
 
+/* "Check this reply" button lives in every message menu; it makes sense only for bot replies. */
+.mes[is_user="true"] .relationship-engine-check,
+.mes[is_system="true"] .relationship-engine-check { display: none; }
+
 @media (max-width: 900px) {
   #re-studio-root { inset: 0; border-radius: 0; }
   .re-studio-body { grid-template-columns: 1fr; overflow: auto; }

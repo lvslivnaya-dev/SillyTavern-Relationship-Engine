@@ -9,6 +9,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
   confirmLargeChanges: true,
   largeChangeThreshold: 12,
   linkedScales: true,
+  autoCharacterLines: true,
+  confirmPersonaLines: true,
+  sendMemories: true,
+  sendTensions: true,
+  sendFactors: true,
   maxPromptCharacters: 2400,
   analysisMaxCharacters: 12000,
   widget: {

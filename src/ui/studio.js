@@ -77,6 +77,10 @@ export function createRelationshipStudio(options = {}) {
     .relationship-card>details>summary{cursor:pointer;font-weight:600;margin-bottom:6px}
     .pair-swap{justify-self:center;display:grid;place-items:center;width:30px;height:30px;min-height:30px;padding:0;font-size:15px;line-height:1;border-radius:8px}
     .pair-swap:disabled{opacity:.4;cursor:default}
+    .pair-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:14px}
+    .pair-card-head h3{margin:0;min-width:0;overflow-wrap:anywhere}
+    .strangers-toggle{display:flex;align-items:center;gap:6px;flex:0 0 auto;font-size:12px;color:var(--rs-muted);cursor:pointer;white-space:nowrap}
+    .strangers-toggle input{width:14px;height:14px;margin:0}
     .tselect{position:relative;min-width:0}
     .tselect-trigger{width:100%;min-height:40px;display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;padding:8px 10px;border:1px solid var(--rs-line);border-radius:8px;background:color-mix(in srgb,var(--rs-inset) 70%,var(--rs-bg));color:var(--rs-text);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .tselect-trigger::after{content:'▾';flex:0 0 auto;color:var(--rs-muted)}
@@ -627,8 +631,12 @@ export function createRelationshipStudio(options = {}) {
       const hiddenFromWidget = (snapshot.ui?.hiddenRelationshipIds ?? []).includes(pairId(pair));
       const editingScales = scaleEditorPairId === pairId(pair);
       const hiddenCount = (pair.hiddenScales ?? []).length;
+      const strangerKey = [pairSource(pair), pairTarget(pair)].sort().join('|');
+      const strangersInput = element('input', { type: 'checkbox', checked: (snapshot.ui?.strangerPairs ?? []).includes(strangerKey) });
+      strangersInput.addEventListener('change', () => act('onToggleStrangers', { relationshipId: pairId(pair), strangers: strangersInput.checked }, 'strangers-toggle'));
+      const strangers = element('label', { className: 'strangers-toggle', title: 'Модель будет помнить, что они ещё не представлены друг другу и не знают имён. Действует в обе стороны. Снимите после знакомства.' }, [strangersInput, 'Незнакомы']);
       const card = element('article', { className: 'card relationship-card' }, [
-        element('h3', { text: pairLabel(snapshot, pair) }),
+        element('div', { className: 'pair-card-head' }, [element('h3', { text: pairLabel(snapshot, pair) }), strangers]),
         editingScales ? renderScaleEditor(pair) : renderOverview(pair),
         element('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--rs-line, #303a49)' } }, [
           button('Факторы роста', 'btn', () => openFactors(pairId(pair))),

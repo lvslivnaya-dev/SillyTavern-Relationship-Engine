@@ -36,8 +36,9 @@ export function selectRuntimePrompt(state, options = {}) {
   const actorSet = options.actorIds ? new Set(options.actorIds) : null;
   const relationshipSet = options.relationshipIds ? new Set(options.relationshipIds) : null;
   const scaleSet = options.scales ? new Set(options.scales) : null;
-  const memoryLimit = Math.max(0, options.memoryLimit ?? 3);
-  const tensionLimit = Math.max(0, options.tensionLimit ?? 3);
+  const includeKind = { memories: options.includeMemories !== false, tensions: options.includeTensions !== false };
+  const memoryLimit = includeKind.memories ? Math.max(0, options.memoryLimit ?? 3) : 0;
+  const tensionLimit = includeKind.tensions ? Math.max(0, options.tensionLimit ?? 3) : 0;
   const maxRelationships = Math.max(0, options.maxRelationships ?? 8);
 
   const selected = Object.values(state.relationships || {})
@@ -65,12 +66,13 @@ export function selectRuntimePrompt(state, options = {}) {
     const tensions = compactItems(relation.tensions, tensionLimit);
     if (memories) fields.push(`mem=${memories}`);
     if (tensions) fields.push(`ten=${tensions}`);
-    const factors = (relation.factors || []).slice(0, 4)
+    const factors = options.includeFactors === false ? '' : (relation.factors || []).slice(0, 4)
       .map(factor => `${factor.direction === 'down' ? '-' : '+'}${factor.scaleId}: ${factor.text}`).join(' | ');
     if (factors) fields.push(`grow[${factors.trim()}]`);
     lines.push(fields.filter(Boolean).join(';'));
   }
   for (const kind of ['memories', 'tensions']) {
+    if (!includeKind[kind]) continue;
     const items = collectRecords(state, kind).filter(item => !item.relationshipId && !item.disabled).slice(-8);
     for (const item of items) {
       const participants = item.participantIds.map(id => state.entities[id]?.name || id).join(',') || 'all';
@@ -78,10 +80,17 @@ export function selectRuntimePrompt(state, options = {}) {
     }
   }
   for (const kind of ['memories', 'tensions']) {
+    if (!includeKind[kind]) continue;
     for (const item of collectRecords(state, kind).filter(item => item.relationshipId && !item.disabled)) {
       const annotation = describeKnownBy(state, item);
       if (annotation) lines.push(`secret-${kind}=${item.text}${annotation}`);
     }
+  }
+  // Strangers are toggled by the user only; the flag is mutual, stored as a sorted "a|b" key.
+  for (const key of state.ui?.strangerPairs ?? []) {
+    const [first, second] = key.split('|').map(id => state.entities[id]?.name);
+    if (!first || !second) continue;
+    lines.push(`strangers[${first} & ${second}]: not introduced yet — they do not know each other's names, history or private details. They must meet naturally or be introduced by someone who knows both; never use the other's name before learning it in the story.`);
   }
   for (const triangle of state.ui?.triangles ?? []) {
     lines.push(`triangle center=${state.entities[triangle.centerId]?.name}; others=${[triangle.firstId, triangle.secondId].map(id => state.entities[id]?.name).join(',')}; grouping only, do not invent love or rivalry`);

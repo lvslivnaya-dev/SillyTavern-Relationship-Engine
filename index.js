@@ -23,11 +23,14 @@ import { onChangeBusy, getBusy, resetBusy } from './src/integration/busy.js';
 import { clearLog, formatLog, logEvent } from './src/integration/diagnostics.js';
 import { triangleEdges } from './src/core/records.js';
 import { mountExtensionShell } from './src/integration/shell.js';
+import { mountMessageButtons } from './src/integration/message-buttons.js';
 import { createChatStorage } from './src/integration/storage.js';
 import { createRelationshipStudio } from './src/ui/studio.js';
 import { createRelationshipWidget } from './src/ui/widget.js';
 
 const MESSAGE_EXTRA_KEY = 'relationshipEngineV1';
+/** Plain on/off preferences edited as checkboxes in the Studio settings. */
+const TOGGLE_SETTINGS = ['linkedScales', 'autoCharacterLines', 'confirmPersonaLines', 'sendMemories', 'sendTensions', 'sendFactors'];
 let controller = null;
 
 /** SillyTavern popups render their text as HTML. */
@@ -76,7 +79,10 @@ export async function init() {
       personaMismatch: Boolean(persona && chatPersona && boundPersonaName
         && boundPersonaName.toLocaleLowerCase('ru-RU') !== chatPersona.toLocaleLowerCase('ru-RU')),
       lorebooks: { available: SillyTavern.getContext().getWorldInfoNames?.() ?? [], selected: state.ui?.linkedLorebooks ?? [], cardWorlds: cardWorldNames(), status: 'Книги подключаются только к анализатору этого чата. Исходные файлы не изменяются.' },
-      settings: { autoTrack: settings.autoAnalyze, widgetEnabled: settings.widget.visible, linkedScales: settings.linkedScales !== false },
+      settings: {
+        autoTrack: settings.autoAnalyze, widgetEnabled: settings.widget.visible,
+        ...Object.fromEntries(TOGGLE_SETTINGS.map(key => [key, settings[key] !== false])),
+      },
       widget: {
         expanded: settings.widget.expanded,
         position: { x: settings.widget.x, y: settings.widget.y },
@@ -137,6 +143,9 @@ export async function init() {
       maxRelationships: Math.min(Object.keys(targetState.relationships).length, 8),
       memoryLimit: 2,
       tensionLimit: 2,
+      includeMemories: settings.sendMemories !== false,
+      includeTensions: settings.sendTensions !== false,
+      includeFactors: settings.sendFactors !== false,
     }).slice(0, settings.maxPromptCharacters);
   }
 
@@ -235,7 +244,7 @@ export async function init() {
   async function changeSettings({ settings: patch }) {
     if (Object.hasOwn(patch, 'autoTrack')) settings.autoAnalyze = Boolean(patch.autoTrack);
     if (Object.hasOwn(patch, 'widgetEnabled')) settings.widget.visible = Boolean(patch.widgetEnabled);
-    if (Object.hasOwn(patch, 'linkedScales')) settings.linkedScales = Boolean(patch.linkedScales);
+    for (const key of TOGGLE_SETTINGS) if (Object.hasOwn(patch, key)) settings[key] = Boolean(patch[key]);
     context.saveSettingsDebounced();
     widget.element.hidden = !settings.widget.visible;
     refreshPrompt();
@@ -450,7 +459,12 @@ export async function init() {
       onProgress(`Анализирую историю: пакет ${batchIndex + 1} из ${batches.length}…`);
       const result = await analyzeHistoryBatch(ctx, next, batches[batchIndex], settings, loreContext);
       assertCurrent();
-      next = applyAnalysisResult(next, result, { transactionId: 'history-import' }, [], { linkedScales: settings.linkedScales !== false }).state;
+      // History analysis is started by the user explicitly, so persona lines are not asked one by one;
+      // only the "no automatic character lines" setting applies.
+      next = applyAnalysisResult(next, result, { transactionId: 'history-import' }, [], {
+        linkedScales: settings.linkedScales !== false,
+        allowNewPair: (subjectId, objectId) => settings.autoCharacterLines !== false || objectId === (next.ui?.personaId || ''),
+      }).state;
     }
     assertCurrent();
     next.ui ??= {};
@@ -723,6 +737,17 @@ export async function init() {
     onImport: importFromStudio,
     onExport: exportForStudio,
     onSettingsChange: changeSettings,
+    onToggleStrangers: async ({ relationshipId: id, strangers }) => {
+      const relation = state.relationships[id];
+      if (!relation) throw new Error('Линия не найдена.');
+      const key = [relation.from, relation.to].sort().join('|');
+      const next = structuredClone(state);
+      next.ui ??= {};
+      const pairs = new Set(next.ui.strangerPairs ?? []);
+      if (strangers) pairs.add(key); else pairs.delete(key);
+      next.ui.strangerPairs = [...pairs];
+      await commit(next, true);
+    },
     onSetHiddenScales: async ({ relationshipId: id, hiddenScales }) => {
       if (!state.relationships[id]) throw new Error('Линия не найдена.');
       await commit(applyOperation(state, createOperation('scales.hide', { relationshipId: id, hiddenScales }, {
@@ -738,7 +763,7 @@ export async function init() {
       'Персонажей / линий': `${Object.keys(state.entities).length} / ${Object.keys(state.relationships).length}`,
     }),
     onClearDiagnostics: () => { clearLog(); notify(); },
-    onAnalyzeCurrent: () => enqueueAnalysis(SillyTavern.getContext().chat.length - 1, true),
+    onAnalyzeCurrent: () => runManualCheck(lastBotMessageIndex()),
     onAnalyzeHistory: enqueueHistory,
     onAnalyzeLorebooks: analyzeLorebooksForCharacters,
   };
@@ -750,6 +775,11 @@ export async function init() {
       { key: 'autoTrack', label: 'Автоматически анализировать новые ответы', type: 'checkbox' },
       { key: 'widgetEnabled', label: 'Показывать компактный виджет', type: 'checkbox' },
       { key: 'linkedScales', label: 'Связанные шкалы: рост привязанности немного тянет дружбу и доверие, обида — враждебность и т. п.', type: 'checkbox' },
+      { key: 'autoCharacterLines', label: 'Автоматически создавать линии между персонажами (персонаж → персонаж)', type: 'checkbox' },
+      { key: 'confirmPersonaLines', label: 'Спрашивать перед созданием новой линии к персоне', type: 'checkbox' },
+      { key: 'sendMemories', label: 'Отправлять модели воспоминания', type: 'checkbox' },
+      { key: 'sendTensions', label: 'Отправлять модели напряжения', type: 'checkbox' },
+      { key: 'sendFactors', label: 'Отправлять модели факторы роста', type: 'checkbox' },
     ],
   });
   widget = createRelationshipWidget({
@@ -758,6 +788,7 @@ export async function init() {
     position: { x: settings.widget.x ?? Math.max(8, window.innerWidth - 350), y: settings.widget.y ?? 96 },
     callbacks: {
       onOpenStudio: () => studio.open(),
+      onAnalyzeLatest: () => runManualCheck(lastBotMessageIndex()),
       onPositionChange: ({ position }) => {
         settings.widget.x = position.x;
         settings.widget.y = position.y;
@@ -894,7 +925,7 @@ export async function init() {
     const ctx = SillyTavern.getContext();
     const sourceChatId = ctx.getCurrentChatId();
     const label = `Сообщение #${messageIndex}`;
-    const skip = reason => { logEvent('info', `${label}: анализ пропущен — ${reason}`); };
+    const skip = reason => { logEvent('info', `${label}: анализ пропущен — ${reason}`); return { applied: 0, skipped: reason }; };
     if ((expectedChatId != null && sourceChatId !== expectedChatId) || expectedEpoch !== chatEpoch) return skip('чат сменился до начала анализа');
     if (isGenerationActive()) await waitForGenerationEnd();
     if (expectedEpoch !== chatEpoch || SillyTavern.getContext().getCurrentChatId() !== sourceChatId) return skip('чат сменился во время генерации');
@@ -929,8 +960,11 @@ export async function init() {
     const transactionId = `message:${messageIndex}:${textHash}`;
     let next = state.operations.some(operation => operation.messageId === String(messageIndex))
       ? rollbackMessage(state, String(messageIndex)) : state;
+    const allowNewPair = await confirmNewPairs(next, result, acceptedNewCharacters);
+    if (!allowNewPair) return skip('анализ отменён');
+    if (isStale()) return skip('чат или текст сообщения изменились');
     const applied = applyAnalysisResult(next, result, { transactionId, messageId: String(messageIndex), messageIndex }, acceptedNewCharacters,
-      { linkedScales: settings.linkedScales !== false });
+      { linkedScales: settings.linkedScales !== false, allowNewPair });
     next = applied.state;
     const operations = applied.operations;
     if (!operations.length) return skip('модель не нашла изменений в отношениях');
@@ -945,6 +979,60 @@ export async function init() {
     logEvent('info', `${label}: применено изменений — ${operations.length}, состояние сохранено`);
     if (isGenerationActive()) await waitForGenerationEnd();
     await SillyTavern.getContext().saveChat();
+    return { applied: operations.length };
+  }
+
+  /**
+   * #25: new lines between two characters can be switched off, new lines toward
+   * the persona are confirmed. A dry run (applyAnalysisResult is pure) tells which
+   * lines the result would create. Returns a predicate, or null when cancelled.
+   */
+  async function confirmNewPairs(baseState, result, acceptedNewCharacters) {
+    const personaId = baseState.ui?.personaId || '';
+    const allowCharacterLines = settings.autoCharacterLines !== false;
+    const basePolicy = (subjectId, objectId) => allowCharacterLines || (personaId && objectId === personaId);
+    const dryRun = applyAnalysisResult(baseState, result, {}, acceptedNewCharacters, { linkedScales: false, allowNewPair: basePolicy }).state;
+    const created = Object.values(dryRun.relationships).filter(relation => !baseState.relationships[relation.id]);
+    const personaLines = settings.confirmPersonaLines === false ? [] : created.filter(relation => personaId && relation.to === personaId);
+    let rejected = new Set();
+    if (personaLines.length) {
+      const nameOf = id => escapeHtml(dryRun.entities[id]?.name ?? id);
+      const items = personaLines.map(relation => `<li>${nameOf(relation.from)} → ${nameOf(relation.to)}</li>`).join('');
+      const ctx = SillyTavern.getContext();
+      const answer = await ctx.Popup.show.confirm(
+        'Новые линии с персоной',
+        `<p>Анализ хочет начать отслеживать чувства к персоне:</p><ul style="text-align:left;margin:0;padding-left:18px">${items}</ul><p>Создать эти линии? «Нет» — применить анализ без них.</p>`,
+        { okButton: 'Создать', cancelButton: 'Без них' },
+      );
+      if (answer !== ctx.POPUP_RESULT.AFFIRMATIVE) {
+        rejected = new Set(personaLines.map(relation => relation.id));
+        logEvent('info', `Новые линии с персоной отклонены: ${personaLines.length}`);
+      }
+    }
+    return (subjectId, objectId) => basePolicy(subjectId, objectId) && !rejected.has(relationshipId(subjectId, objectId));
+  }
+
+  function lastBotMessageIndex() {
+    const chat = SillyTavern.getContext().chat ?? [];
+    for (let index = chat.length - 1; index >= 0; index -= 1) {
+      if (!chat[index]?.is_user && !chat[index]?.is_system && chat[index]?.mes?.trim()) return index;
+    }
+    return -1;
+  }
+
+  /** Manual check from a message button, the widget or the Studio, with a visible outcome. */
+  async function runManualCheck(index) {
+    const toast = globalThis.toastr;
+    if (!Number.isInteger(index) || index < 0) {
+      toast?.warning?.('В чате нет ответа бота для проверки.', 'Движок отношений');
+      return null;
+    }
+    toast?.info?.(`Проверяю ответ #${index}…`, 'Движок отношений', { timeOut: 2500 });
+    const result = await enqueueAnalysis(index, true);
+    if (!result) return null; // the failure toast is shown by enqueueAnalysis
+    if (result.applied) toast?.success?.(`Применено изменений: ${result.applied}. Подробности — во вкладке «История».`, 'Движок отношений');
+    else toast?.info?.(`Без изменений: ${result.skipped}.`, 'Движок отношений');
+    return result;
   }
 
   function enqueueAnalysis(messageIndex, force = false) {
@@ -1023,16 +1111,22 @@ export async function init() {
       .catch(error => console.error('[Relationship Engine] Message reconciliation failed.', error));
   });
 
+  const messageButtons = mountMessageButtons(index => { runManualCheck(index); });
+  for (const type of [events.CHARACTER_MESSAGE_RENDERED, events.MORE_MESSAGES_LOADED, events.CHAT_CHANGED]) {
+    if (type) listen(type, () => messageButtons.refresh());
+  }
+
   mountShell();
   refreshPrompt();
   notify();
 
   controller = {
     open: () => studio.open(),
-    analyzeCurrent: () => enqueueAnalysis(SillyTavern.getContext().chat.length - 1, true),
+    analyzeCurrent: () => runManualCheck(lastBotMessageIndex()),
     getState: () => structuredClone(state),
     destroy() {
       listeners.splice(0).forEach(remove => remove());
+      messageButtons.unmount();
       unmountShell();
       studio.destroy();
       widget.destroy();

@@ -31,7 +31,8 @@ export function describeProposedChanges(state, operations, threshold) {
 /** Materialize validated analysis into ordinary reversible core operations.
  * acceptedNewCharacters: entries from result.newCharacters that the user confirmed;
  * operations may reference them by scene name, which is mapped to the new stable ID.
- * options.linkedScales: false disables spills into related scales. */
+ * options.linkedScales: false disables spills into related scales.
+ * options.allowNewPair(subjectId, objectId): false skips everything that would create a new line. */
 export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCharacters = [], options = {}) {
   let next = state;
   const personaId = state.ui?.personaId || '';
@@ -63,6 +64,7 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
   function ensurePair(subjectId, objectId) {
     if (subjectId === objectId || !next.entities[subjectId] || !next.entities[objectId]) return null;
     const id = relationshipId(subjectId, objectId);
+    if (!next.relationships[id] && options.allowNewPair && !options.allowNewPair(subjectId, objectId)) return null;
     if (!next.relationships[id]) next = applyOperation(next, createOperation('relationship.upsert', {
       from: subjectId, to: objectId,
     }, { id: `relationship:${id}`, reason: 'Связь обнаружена при анализе', timestamp: new Date().toISOString() }));
