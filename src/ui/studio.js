@@ -837,7 +837,8 @@ export function createRelationshipStudio(options = {}) {
 
   function renderJournal() {
     const card = element('div', { className: 'card' }, [element('h3', { text: 'История изменений' })]);
-    const entries = snapshot.journal || snapshot.history || [];
+    // The journal is chronological (the widget relies on that); show newest first.
+    const entries = [...(snapshot.journal || snapshot.history || [])].reverse();
     if (!entries.length) card.append(element('div', { className: 'empty', text: 'Изменений отношений пока нет.' }));
     for (const entry of entries) {
       const row = element('div', { className: 'journal-row', style: { padding: '8px 0', borderBottom: '1px solid var(--rs-line, #303a49)' } }, [
