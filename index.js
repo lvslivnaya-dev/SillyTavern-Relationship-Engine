@@ -171,7 +171,7 @@ export async function init() {
     const id = relationshipId(sourceId, targetId);
     let next = state;
     if (!next.relationships[id]) {
-      next = applyOperation(next, createOperation('relationship.upsert', { from: sourceId, to: targetId }, { id: `relationship:${id}` }));
+      next = applyOperation(next, createOperation('relationship.upsert', { from: sourceId, to: targetId }, { id: uniqueId('relationship') }));
     }
     next = structuredClone(next);
     next.ui ??= {};
@@ -585,7 +585,7 @@ export async function init() {
       let next = state;
       for (const [from, to] of edges) for (const [a, b] of [[from, to], [to, from]]) {
         const id = relationshipId(a, b);
-        if (!next.relationships[id]) next = applyOperation(next, createOperation('relationship.upsert', { from: a, to: b }, { id: `relationship:${id}` }));
+        if (!next.relationships[id]) next = applyOperation(next, createOperation('relationship.upsert', { from: a, to: b }, { id: uniqueId('relationship') }));
       }
       next = structuredClone(next);
       next.ui ??= {};

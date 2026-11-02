@@ -67,8 +67,9 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
     if (!next.relationships[id] && options.allowNewPair && !options.allowNewPair(subjectId, objectId)) return null;
     if (!next.relationships[id]) next = applyOperation(next, createOperation('relationship.upsert', {
       from: subjectId, to: objectId,
-    }, { id: `relationship:${id}`, reason: 'Связь обнаружена при анализе', timestamp: new Date().toISOString() }));
-    return id;
+    }, { id: uniqueId('relationship'), reason: 'Связь обнаружена при анализе', timestamp: new Date().toISOString() }));
+    // Never hand out an ID of a line that does not exist: callers read it right away.
+    return next.relationships[id] ? id : null;
   }
   function add(type, payload, reason) {
     const operation = createOperation(type, payload, {

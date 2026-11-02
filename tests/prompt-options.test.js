@@ -68,3 +68,12 @@ test('budget keeps rules, the strongest lines and recent records instead of cutt
   assert.match(text, /Память 19/, 'свежая запись на месте');
   assert.doesNotMatch(text, /Память 0 /, 'старая запись уступила место');
 });
+
+test('a deleted line can be created again by analysis', () => {
+  const result = parseAnalysis(JSON.stringify({ operations: [{ subjectId: 'a', objectId: 'p', metric: 'trust', delta: 3, reason: 'Помогла' }] }));
+  const first = applyAnalysisResult(setup(), result, { messageId: '1' }).state;
+  const line = Object.values(first.relationships).find(relation => relation.from === 'a' && relation.to === 'p');
+  const removed = applyOperations(first, [createOperation('relationship.remove', { relationshipId: line.id })]);
+  const again = applyAnalysisResult(removed, result, { messageId: '2' }).state;
+  assert.equal(Object.values(again.relationships).find(relation => relation.from === 'a' && relation.to === 'p')?.scales.trust, 3);
+});
