@@ -35,6 +35,7 @@ export function createRelationshipStudio(options = {}) {
   let scaleEditorPairId = null; // overview card whose scale checklist is open
   let editingRecordId = null; // memory/tension shown as an inline editor
   let selectedPairs = new Set(); // overview lines ticked for bulk removal
+  let triangleSetupId = null; // triangle whose setup sheet is open in the factors layer
   const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
 
   const style = element('style', { text: STYLE + `
@@ -74,6 +75,9 @@ export function createRelationshipStudio(options = {}) {
     .triangle-form{display:grid;gap:10px}
     .triangle-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px}
     .triangle-head h3{margin:0}
+    .triangle-goal{margin:-6px 0 14px;font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+    .sheet-section{margin:16px 0 6px;font-size:13px}
+    .sheet-section:first-child{margin-top:0}
     .relationship-card>details+details{margin-top:12px;padding-top:12px;border-top:1px solid var(--rs-line)}
     .relationship-card>details>summary{cursor:pointer;font-weight:600;margin-bottom:6px}
     .pair-swap{justify-self:center;display:grid;place-items:center;width:30px;height:30px;min-height:30px;padding:0;font-size:15px;line-height:1;border-radius:8px}
@@ -236,11 +240,13 @@ export function createRelationshipStudio(options = {}) {
     // The factors dialog lives in its own layer and is NOT rebuilt here:
     // rebuilding it on every state update threw away what the user typed.
     if (factorsPairId && !(snapshot.pairs || []).some(item => pairId(item) === factorsPairId)) closeFactors();
+    if (triangleSetupId && !(snapshot.ui?.triangles ?? []).some(item => item.id === triangleSetupId)) closeFactors();
   }
 
   function openFactors(id) {
     const pair = getPair(snapshot, id);
     if (!pair) return;
+    triangleSetupId = null;
     factorsPairId = pairId(pair);
     const sheet = renderFactorsDialog(pair);
     factorsLayer.replaceChildren(sheet);
@@ -251,6 +257,7 @@ export function createRelationshipStudio(options = {}) {
 
   function closeFactors() {
     factorsPairId = null;
+    triangleSetupId = null;
     factorsLayer.hidden = true;
     factorsLayer.replaceChildren();
     factorsLayer.style.top = '';
@@ -269,6 +276,150 @@ export function createRelationshipStudio(options = {}) {
       factorsLayer.style.top = '';
       factorsLayer.style.height = '';
     }
+  }
+
+  function openTriangleSetup(id) {
+    const triangle = (snapshot.ui?.triangles ?? []).find(item => item.id === id);
+    if (!triangle) return;
+    let lines;
+    try { lines = facade.invoke('onTriangleLines', { id }) ?? []; }
+    catch (error) { setStatus(error?.message || 'Не удалось открыть треугольник', true); return; }
+    factorsPairId = null;
+    triangleSetupId = id;
+    const sheet = renderTriangleDialog(triangle, lines);
+    factorsLayer.replaceChildren(sheet);
+    factorsLayer.hidden = false;
+    fitFactorsToViewport();
+    requestAnimationFrame(() => sheet.querySelector('.factors-close')?.focus({ preventScroll: true }));
+  }
+
+  /** One sheet for a triangle: end point, ready-made trope and factors of all its lines. */
+  function renderTriangleDialog(triangle, lines) {
+    const sheet = element('div', { className: 'factors-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Настройка треугольника' });
+    const head = element('div', { className: 'factors-head' }, [element('h3', { text: `Треугольник: ${triangle.name}` })]);
+    const body = element('div', { className: 'factors-body' });
+    const status = element('p', { className: 'muted factors-status', role: 'status' });
+    const setSheetStatus = (message, danger = false) => { status.textContent = message || ''; status.classList.toggle('danger', danger); };
+    const lineIds = new Set(lines.map(line => line.relationshipId));
+    // Current factors of the triangle's lines (they are the same factors the pair dialog edits).
+    const factors = (snapshot.pairs || []).filter(pair => lineIds.has(pairId(pair)))
+      .flatMap(pair => (pair.factors ?? []).map(factor => ({ ...factor, relationshipId: pairId(pair) })));
+
+    const goal = element('textarea', { value: triangle.goal ?? '', rows: 3, placeholder: 'Куда в итоге должны прийти отношения. Например: центр выбирает одного, второй принимает это и остаётся другом.', 'aria-label': 'Конечная точка' });
+    const wish = element('input', { type: 'text', placeholder: 'Пожелание для генерации (необязательно)', 'aria-label': 'Пожелание к конечной точке' });
+    const generateGoal = button('Сгенерировать цель', 'btn', async () => {
+      generateGoal.disabled = true;
+      setSheetStatus('Придумываю конечную точку по лору и сценам…');
+      try {
+        goal.value = await facade.invoke('onGenerateTriangleGoal', { id: triangle.id, wish: wish.value });
+        setSheetStatus('Цель предложена — поправьте при желании и нажмите «Сохранить».');
+      } catch (error) { setSheetStatus(error?.message || 'Не удалось сгенерировать цель', true); }
+      finally { generateGoal.disabled = false; }
+    });
+
+    const list = element('div', { className: 'factor-list' });
+    function renderRows() {
+      list.replaceChildren();
+      factors.forEach((factor, index) => {
+        const line = element('select', { 'aria-label': 'Линия' });
+        for (const item of lines) line.append(element('option', { value: item.relationshipId, text: item.label, selected: item.relationshipId === factor.relationshipId }));
+        line.addEventListener('change', () => { factor.relationshipId = line.value; });
+        const scale = element('select', { 'aria-label': 'Шкала' });
+        for (const definition of metricDefinitions(snapshot)) scale.append(element('option', { value: definition.key, text: definition.label, selected: definition.key === factor.scaleId }));
+        scale.addEventListener('change', () => { factor.scaleId = scale.value; });
+        const direction = element('select', { 'aria-label': 'Направление' });
+        direction.append(element('option', { value: 'up', text: '+ рост', selected: factor.direction === 'up' }));
+        direction.append(element('option', { value: 'down', text: '− падение', selected: factor.direction === 'down' }));
+        direction.addEventListener('change', () => { factor.direction = direction.value; });
+        const text = element('textarea', { value: factor.text ?? '', 'aria-label': 'Условие', rows: 2 });
+        const autoGrow = () => { text.style.height = 'auto'; text.style.height = `${Math.max(44, text.scrollHeight + 4)}px`; };
+        text.addEventListener('input', () => { factor.text = text.value; autoGrow(); });
+        requestAnimationFrame(autoGrow);
+        const remove = button('×', 'btn icon', () => { factors.splice(index, 1); renderRows(); }, 'Удалить фактор');
+        list.append(element('div', { className: 'factor-row' }, [
+          line,
+          element('div', { className: 'factor-controls' }, [scale, direction, remove]),
+          text,
+        ]));
+      });
+      if (!factors.length) list.append(element('p', { className: 'muted', text: 'Факторов пока нет.' }));
+    }
+    renderRows();
+    const addRow = button('+ Добавить фактор', 'btn', () => {
+      factors.push({ relationshipId: lines[0]?.relationshipId, scaleId: metricDefinitions(snapshot)[0]?.key ?? 'trust', direction: 'up', text: '' });
+      renderRows();
+      list.querySelector('.factor-row:last-child textarea')?.focus();
+    });
+
+    const tropeSelect = element('select', { 'aria-label': 'Троп треугольника' });
+    for (const trope of facade.invoke('onTriangleTropes', {}) ?? []) tropeSelect.append(element('option', { value: trope.id, text: trope.label }));
+    const applyTrope = button('Применить троп', 'btn', () => {
+      try {
+        const result = facade.invoke('onTriangleTropeFactors', { id: triangle.id, tropeId: tropeSelect.value });
+        const added = appendUniqueFactors(factors, (result?.factors ?? []).filter(factor => lineIds.has(factor.relationshipId)));
+        if (!goal.value.trim() && result?.goal) goal.value = result.goal;
+        renderRows();
+        setSheetStatus(`Добавлено факторов: ${added}${result?.goal && goal.value === result.goal ? ', цель подставлена' : ''}. Проверьте и нажмите «Сохранить».`);
+      } catch (error) { setSheetStatus(error?.message || 'Не удалось применить троп', true); }
+    });
+
+    const generateFactors = button('Сгенерировать факторы (заменит список)', 'btn', async () => {
+      generateFactors.disabled = true;
+      setSheetStatus('Генерирую факторы для линий треугольника…');
+      try {
+        const generated = await facade.invoke('onGenerateTriangleFactors', { id: triangle.id, goal: goal.value.trim() });
+        factors.splice(0, factors.length, ...(generated ?? []).filter(factor => lineIds.has(factor.relationshipId)));
+        renderRows();
+        setSheetStatus(`Сгенерировано факторов: ${factors.length}. Проверьте и нажмите «Сохранить».`);
+      } catch (error) { setSheetStatus(error?.message || 'Не удалось сгенерировать факторы', true); }
+      finally { generateFactors.disabled = false; }
+    });
+
+    const save = button('Сохранить', 'btn primary', async () => {
+      save.disabled = true;
+      try {
+        await facade.invoke('onSetTriangleGoal', { id: triangle.id, goal: goal.value });
+        await facade.invoke('onSetTriangleFactors', { id: triangle.id, factors: factors.filter(factor => String(factor.text ?? '').trim()) });
+        setStatus('Треугольник сохранён');
+        closeFactors();
+      } catch (error) {
+        setSheetStatus(error?.message || 'Не удалось сохранить треугольник', true);
+      } finally { save.disabled = false; }
+    });
+    const close = button('Закрыть', 'btn factors-close', closeFactors);
+
+    body.append(
+      element('h4', { className: 'sheet-section', text: 'Конечная точка' }),
+      element('p', { className: 'muted', style: { fontSize: '11px', margin: '0 0 6px' }, text: 'Её видят анализатор и модель — как далёкое направление сюжета, а не задачу на ближайший ответ.' }),
+      goal,
+      element('div', { className: 'factors-generate-row', style: { marginTop: '6px' } }, [wish, generateGoal]),
+      element('h4', { className: 'sheet-section', text: 'Готовый троп' }),
+      element('div', { className: 'factors-generate-row' }, [tropeSelect, applyTrope]),
+      element('h4', { className: 'sheet-section', text: 'Факторы по линиям' }),
+      element('p', { className: 'muted', style: { fontSize: '11px', margin: '0 0 8px' }, text: 'Это те же факторы, что и в окне «Факторы роста» каждой линии: здесь они собраны для всего треугольника.' }),
+      list, addRow,
+      element('div', { className: 'factors-generate' }, [
+        element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Автогенерация учитывает конечную точку, лор подключённых книг и общие сцены троих.' }),
+        generateFactors,
+      ]),
+      status,
+    );
+    sheet.append(head, body, element('div', { className: 'factors-foot' }, [save, close]));
+    return sheet;
+  }
+
+  /** Append factors that are not in the list yet (same line, scale, direction and text). Returns how many were added. */
+  function appendUniqueFactors(list, additions) {
+    const key = factor => `${factor.relationshipId ?? ''}|${factor.scaleId}|${factor.direction}|${String(factor.text).trim().toLocaleLowerCase('ru-RU')}`;
+    const seen = new Set(list.map(key));
+    let added = 0;
+    for (const factor of additions) {
+      if (seen.has(key(factor))) continue;
+      seen.add(key(factor));
+      list.push({ ...factor });
+      added += 1;
+    }
+    return added;
   }
 
   function renderFactorsDialog(pair) {
@@ -352,8 +503,23 @@ export function createRelationshipStudio(options = {}) {
     });
     const close = button('Закрыть', 'btn factors-close', closeFactors);
 
+    // Ready-made tropes: prewritten factors, no model request; appended to the list for review.
+    const tropeSelect = element('select', { 'aria-label': 'Готовый троп' });
+    for (const trope of facade.invoke('onPairTropes', {}) ?? []) tropeSelect.append(element('option', { value: trope.id, text: trope.label }));
+    const addTrope = button('Добавить факторы тропа', 'btn', () => {
+      try {
+        const added = appendUniqueFactors(factors, facade.invoke('onPairTropeFactors', { tropeId: tropeSelect.value }) ?? []);
+        renderRows();
+        setSheetStatus(added ? `Добавлено факторов: ${added}. Проверьте и нажмите «Сохранить».` : 'Все факторы этого тропа уже в списке.');
+      } catch (error) { setSheetStatus(error?.message || 'Не удалось добавить троп', true); }
+    });
+
     body.append(
       list, addRow,
+      element('div', { className: 'factors-generate' }, [
+        element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Готовый троп: заранее прописанные факторы без запроса к модели — добавляются к списку.' }),
+        element('div', { className: 'factors-generate-row' }, [tropeSelect, addTrope]),
+      ]),
       element('div', { className: 'factors-generate' }, [
         element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Автогенерация: учитывает лор подключённых книг и сцены с обоими персонажами. «Своё направление» — впишите текстом.' }),
         element('div', { className: 'factors-generate-row' }, [directionSelect, customDirection, generate]),
@@ -967,8 +1133,12 @@ export function createRelationshipStudio(options = {}) {
       const group = element('section', { className: 'card triangle-group' }, [
         element('div', { className: 'triangle-head' }, [
           element('h3', { text: triangle.name }),
-          button('Удалить группу', 'btn', () => act('onRemoveTriangle', { id: triangle.id })),
+          element('div', { className: 'row' }, [
+            button('Цель и факторы', 'btn primary', () => openTriangleSetup(triangle.id), 'Конечная точка, готовый троп и факторы роста всех линий треугольника'),
+            button('Удалить группу', 'btn', () => act('onRemoveTriangle', { id: triangle.id })),
+          ]),
         ]),
+        element('p', { className: `triangle-goal${triangle.goal ? '' : ' muted'}`, text: triangle.goal ? `Конечная точка: ${triangle.goal}` : 'Конечная точка не задана.' }),
       ]);
       const edges = element('div', { className: 'triangle-edges' });
       for (const [a, b] of triangleEdges(triangle.centerId, triangle.firstId, triangle.secondId)) {

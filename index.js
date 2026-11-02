@@ -17,7 +17,8 @@ import { getSettings } from './src/integration/settings.js';
 import { createHistoryBatches, rebuildWithoutAutomaticHistory, historyFingerprint, sampleHistory } from './src/integration/history.js';
 import { applyAnalysisResult, describeProposedChanges } from './src/integration/analysis-operations.js';
 import { loadLinkedLore, analyzeLorebookCharacters, canonKeys, namesMatch } from './src/integration/lorebooks.js';
-import { generateGrowthFactors, directionPresets } from './src/integration/growth.js';
+import { generateGrowthFactors, directionPresets, generateTriangleFactors, generateTriangleGoal } from './src/integration/growth.js';
+import { pairTropeFactors, pairTropes, triangleTropeFactors, triangleTropes } from './src/integration/tropes.js';
 import { getAnalysisTokenUsage } from './src/integration/analyzer.js';
 import { onChangeBusy, getBusy, resetBusy } from './src/integration/busy.js';
 import { clearLog, formatLog, logEvent } from './src/integration/diagnostics.js';
@@ -192,6 +193,26 @@ export async function init() {
       sourceId: existing?.sourceId,
     });
     await commit(applyOperation(state, createOperation('entity.upsert', entity, { id: uniqueId('entity-update') })), true);
+  }
+
+  function findTriangle(id) {
+    const triangle = (state.ui?.triangles ?? []).find(item => item.id === id);
+    if (!triangle) throw new Error('Треугольник не найден.');
+    return triangle;
+  }
+
+  /** The triangle's tracked directed lines: both directions of its three edges, minus the persona's own. */
+  function triangleLines(triangle) {
+    const personaId = state.ui?.personaId || '';
+    const name = id => state.entities[id]?.name ?? id;
+    return triangleEdges(triangle.centerId, triangle.firstId, triangle.secondId)
+      .flatMap(([a, b]) => [[a, b], [b, a]])
+      .filter(([from]) => from !== personaId)
+      .map(([from, to]) => ({ from, to, relationshipId: relationshipId(from, to), label: `${name(from)} → ${name(to)}` }));
+  }
+
+  function withLineIds(factors) {
+    return factors.map(factor => ({ ...factor, relationshipId: relationshipId(factor.from, factor.to) }));
   }
 
   async function selectPair({ sourceId, targetId }) {
@@ -598,6 +619,54 @@ export async function init() {
       next.ui.triangles = (next.ui.triangles ?? []).filter(item => item.id !== id);
       await commit(next, true);
     },
+    onSetTriangleGoal: async ({ id, goal }) => {
+      const next = structuredClone(state);
+      const triangle = (next.ui?.triangles ?? []).find(item => item.id === id);
+      if (!triangle) throw new Error('Треугольник не найден.');
+      const text = String(goal ?? '').trim().slice(0, 500);
+      if (text) triangle.goal = text; else delete triangle.goal;
+      await commit(next, true);
+    },
+    onGenerateTriangleGoal: async ({ id, wish }) => {
+      if (isGenerationActive()) await waitForGenerationEnd();
+      const triangle = findTriangle(id);
+      const loreContext = await loadLinkedLore(SillyTavern.getContext(), state);
+      return generateTriangleGoal(SillyTavern.getContext(), state, triangle, { loreContext, wish });
+    },
+    onTriangleLines: ({ id }) => triangleLines(findTriangle(id)),
+    onGenerateTriangleFactors: async ({ id, goal }) => {
+      if (isGenerationActive()) await waitForGenerationEnd();
+      const triangle = findTriangle(id);
+      const lines = triangleLines(triangle);
+      const loreContext = await loadLinkedLore(SillyTavern.getContext(), state);
+      const factors = await generateTriangleFactors(SillyTavern.getContext(), state, triangle, lines, { goal: goal ?? triangle.goal, loreContext });
+      return withLineIds(factors);
+    },
+    onTriangleTropes: () => triangleTropes(),
+    onTriangleTropeFactors: ({ id, tropeId }) => {
+      const triangle = findTriangle(id);
+      const result = triangleTropeFactors(tropeId, triangle, state.config.scales.map(scale => scale.id), state.ui?.personaId || '');
+      return { goal: result.goal, factors: withLineIds(result.factors) };
+    },
+    /** Saves the combined editor: every tracked line of the triangle gets exactly the listed factors. */
+    onSetTriangleFactors: async ({ id, factors }) => {
+      const triangle = findTriangle(id);
+      let next = state;
+      for (const line of triangleLines(triangle)) {
+        if (!next.relationships[line.relationshipId]) {
+          next = applyOperation(next, createOperation('relationship.upsert', { from: line.from, to: line.to }, { id: uniqueId('relationship') }));
+        }
+      }
+      const meta = { transactionId: uniqueId('manual'), reason: `Факторы треугольника «${triangle.name}»`, timestamp: new Date().toISOString() };
+      next = applyOperations(next, triangleLines(triangle).map(line => createOperation('factors.set', {
+        relationshipId: line.relationshipId,
+        factors: (factors ?? []).filter(factor => factor.relationshipId === line.relationshipId && String(factor.text ?? '').trim())
+          .map(({ scaleId, direction, text }) => ({ scaleId, direction, text })),
+      }, meta)));
+      await commit(next, true);
+    },
+    onPairTropes: () => pairTropes(),
+    onPairTropeFactors: ({ tropeId }) => pairTropeFactors(tropeId, state.config.scales.map(scale => scale.id)),
     onRefreshLorebooks: () => notify(),
     onLinkLorebook: async ({ name }) => {
       if (!(SillyTavern.getContext().getWorldInfoNames?.() ?? []).includes(name)) throw new Error('Лорбук не найден. Обновите список.');

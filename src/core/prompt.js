@@ -109,7 +109,10 @@ export function selectRuntimePrompt(state, options = {}) {
     ruleLines.push(`strangers[${first} & ${second}]: not introduced yet — they do not know each other's names, history or private details. They must meet naturally or be introduced by someone who knows both; never use the other's name before learning it in the story.`);
   }
   for (const triangle of state.ui?.triangles ?? []) {
-    ruleLines.push(`triangle center=${state.entities[triangle.centerId]?.name}; others=${[triangle.firstId, triangle.secondId].map(id => state.entities[id]?.name).join(',')}; grouping only, do not invent love or rivalry`);
+    const base = `triangle center=${state.entities[triangle.centerId]?.name}; others=${[triangle.firstId, triangle.secondId].map(id => state.entities[id]?.name).join(',')}`;
+    ruleLines.push(triangle.goal
+      ? `${base}; long-term end point: ${clip(triangle.goal, 400)} — a distant direction, not a task for this reply: never rush, skip stages or force it; let it emerge only from earned in-story events`
+      : `${base}; grouping only, do not invent love or rivalry`);
   }
 
   const budget = Number.isFinite(options.maxCharacters) ? Math.max(0, options.maxCharacters) : Infinity;
