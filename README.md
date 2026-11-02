@@ -13,13 +13,19 @@ Relationship Engine tracks what one story character feels toward another. It doe
 
 - Multiple simultaneous romantic and non-romantic relationships.
 - Directed pairs: `A → B` is independent from `B → A`.
-- Affection, trust, respect, attraction, friendship, fear, resentment, hostility, jealousy, and dependency.
+- Affection, love, trust, respect, attraction, friendship, fear, resentment, hostility, jealousy, dependency, approval, and guilt; scales can be hidden per line.
+- Linked scales: a change found in the scene nudges related scales (one hop, capped).
 - Per-chat storage in SillyTavern chat metadata.
 - Reversible message transactions for swipe, edit, and delete workflows.
-- Compact runtime instructions injected before generation.
-- Optional LLM scene analysis using the currently selected SillyTavern API.
+- Compact runtime instructions injected before generation, budgeted by section.
+- Optional LLM scene analysis using the selected SillyTavern API or a cheaper auxiliary model (a Connection Manager profile or a custom OpenAI-compatible URL).
+- Memories and tensions with participants and "who knows"; editable.
+- Relationship headcanons per pair, picked for each scene by meaning (local multilingual model in the browser or an embeddings API) or by mentions; optional automatic filling during play.
+- Triangles with an end point, growth factors per line, and ready-made tropes (including per-scale pace).
+- "Strangers" flag for characters who have not been introduced.
+- Check a reply from the message menu or the widget.
 - Large Relationship Studio and a movable compact widget.
-- JSON import/export.
+- JSON import/export and a copyable diagnostics log.
 - Warning when Love Score appears to be active.
 
 ## Installation from GitHub
