@@ -1,4 +1,5 @@
 import { applyOperation, createEntity, createOperation, relationshipId, uniqueId } from '../core/index.js';
+import { coupledDeltas } from './coupling.js';
 
 function normalizedName(value) {
   return String(value ?? '').trim().toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
@@ -29,8 +30,9 @@ export function describeProposedChanges(state, operations, threshold) {
 
 /** Materialize validated analysis into ordinary reversible core operations.
  * acceptedNewCharacters: entries from result.newCharacters that the user confirmed;
- * operations may reference them by scene name, which is mapped to the new stable ID. */
-export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCharacters = []) {
+ * operations may reference them by scene name, which is mapped to the new stable ID.
+ * options.linkedScales: false disables spills into related scales. */
+export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCharacters = [], options = {}) {
   let next = state;
   const personaId = state.ui?.personaId || '';
   const operations = [];
@@ -73,6 +75,8 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
     next = applyOperation(next, operation);
     operations.push(operation);
   }
+  // Resolve first, so linked-scale spills know which scales the analyzer evidenced itself.
+  const resolved = [];
   for (const proposed of result.operations ?? []) {
     const subjectId = resolveId(proposed.subjectId);
     const objectId = resolveId(proposed.objectId);
@@ -84,13 +88,22 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
     if (!next.config.scales.some(scale => scale.id === metric)) continue;
     const id = ensurePair(subjectId, objectId);
     if (!id) continue;
-    add('scale.delta', { relationshipId: id, scaleId: metric, value: Number(proposed.delta) }, proposed.reason);
-    // Love and sexual attraction softly feed each other: a quarter of a significant
-    // change spills into the partner scale, capped so pure lust cannot instantly create love.
-    const partner = metric === 'love' ? 'attraction' : metric === 'attraction' ? 'love' : null;
-    if (partner && next.config.scales.some(scale => scale.id === partner) && Math.abs(Number(proposed.delta)) >= 4) {
-      const coupled = Math.max(-3, Math.min(3, Math.round(Number(proposed.delta) * 0.25)));
-      if (coupled !== 0) add('scale.delta', { relationshipId: id, scaleId: partner, value: coupled }, `Связанная шкала (${metric} ${proposed.delta > 0 ? '+' : ''}${proposed.delta})`);
+    if ((next.relationships[id].hiddenScales ?? []).includes(metric)) continue;
+    resolved.push({ id, metric, delta: Number(proposed.delta), reason: proposed.reason });
+  }
+  const evidenced = new Map();
+  for (const change of resolved) {
+    if (!evidenced.has(change.id)) evidenced.set(change.id, new Set());
+    evidenced.get(change.id).add(change.metric);
+  }
+  for (const change of resolved) {
+    add('scale.delta', { relationshipId: change.id, scaleId: change.metric, value: change.delta }, change.reason);
+    if (options.linkedScales === false) continue;
+    const hidden = new Set(next.relationships[change.id].hiddenScales ?? []);
+    const available = new Set(next.config.scales.map(scale => scale.id).filter(scaleId => !hidden.has(scaleId)));
+    for (const spill of coupledDeltas(change.metric, change.delta, available, evidenced.get(change.id))) {
+      add('scale.delta', { relationshipId: change.id, scaleId: spill.scaleId, value: spill.value },
+        `Связанная шкала (${change.metric} ${change.delta > 0 ? '+' : ''}${change.delta})`);
     }
   }
   for (const [collection, type] of [['memories', 'memory.add'], ['tensions', 'tension.add']]) {

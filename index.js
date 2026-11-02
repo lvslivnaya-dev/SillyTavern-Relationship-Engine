@@ -76,7 +76,7 @@ export async function init() {
       personaMismatch: Boolean(persona && chatPersona && boundPersonaName
         && boundPersonaName.toLocaleLowerCase('ru-RU') !== chatPersona.toLocaleLowerCase('ru-RU')),
       lorebooks: { available: SillyTavern.getContext().getWorldInfoNames?.() ?? [], selected: state.ui?.linkedLorebooks ?? [], cardWorlds: cardWorldNames(), status: 'Книги подключаются только к анализатору этого чата. Исходные файлы не изменяются.' },
-      settings: { autoTrack: settings.autoAnalyze, widgetEnabled: settings.widget.visible },
+      settings: { autoTrack: settings.autoAnalyze, widgetEnabled: settings.widget.visible, linkedScales: settings.linkedScales !== false },
       widget: {
         expanded: settings.widget.expanded,
         position: { x: settings.widget.x, y: settings.widget.y },
@@ -235,6 +235,7 @@ export async function init() {
   async function changeSettings({ settings: patch }) {
     if (Object.hasOwn(patch, 'autoTrack')) settings.autoAnalyze = Boolean(patch.autoTrack);
     if (Object.hasOwn(patch, 'widgetEnabled')) settings.widget.visible = Boolean(patch.widgetEnabled);
+    if (Object.hasOwn(patch, 'linkedScales')) settings.linkedScales = Boolean(patch.linkedScales);
     context.saveSettingsDebounced();
     widget.element.hidden = !settings.widget.visible;
     refreshPrompt();
@@ -449,7 +450,7 @@ export async function init() {
       onProgress(`Анализирую историю: пакет ${batchIndex + 1} из ${batches.length}…`);
       const result = await analyzeHistoryBatch(ctx, next, batches[batchIndex], settings, loreContext);
       assertCurrent();
-      next = applyAnalysisResult(next, result, { transactionId: 'history-import' }).state;
+      next = applyAnalysisResult(next, result, { transactionId: 'history-import' }, [], { linkedScales: settings.linkedScales !== false }).state;
     }
     assertCurrent();
     next.ui ??= {};
@@ -689,6 +690,12 @@ export async function init() {
     onImport: importFromStudio,
     onExport: exportForStudio,
     onSettingsChange: changeSettings,
+    onSetHiddenScales: async ({ relationshipId: id, hiddenScales }) => {
+      if (!state.relationships[id]) throw new Error('Линия не найдена.');
+      await commit(applyOperation(state, createOperation('scales.hide', { relationshipId: id, hiddenScales }, {
+        transactionId: uniqueId('manual'), reason: 'Видимость шкал линии', timestamp: new Date().toISOString(),
+      })), true);
+    },
     onGetDiagnostics: () => formatLog({
       'Движок отношений': 'журнал диагностики',
       'Браузер': globalThis.navigator?.userAgent ?? '?',
@@ -709,6 +716,7 @@ export async function init() {
     settingsFields: [
       { key: 'autoTrack', label: 'Автоматически анализировать новые ответы', type: 'checkbox' },
       { key: 'widgetEnabled', label: 'Показывать компактный виджет', type: 'checkbox' },
+      { key: 'linkedScales', label: 'Связанные шкалы: рост привязанности немного тянет дружбу и доверие, обида — враждебность и т. п.', type: 'checkbox' },
     ],
   });
   widget = createRelationshipWidget({
@@ -811,8 +819,11 @@ export async function init() {
     }
   }
 
+  /** Returns the operations to apply: all, only the small ones, or null when cancelled. */
   async function confirmLargeChanges(operations) {
-    if (!settings.confirmLargeChanges || !operations.some(item => Math.abs(Number(item.delta)) >= settings.largeChangeThreshold)) return true;
+    const isLarge = item => Math.abs(Number(item.delta)) >= settings.largeChangeThreshold;
+    if (!settings.confirmLargeChanges || !operations.some(isLarge)) return operations;
+    const smallOnly = operations.filter(item => !isLarge(item));
     const rows = describeProposedChanges(state, operations, settings.largeChangeThreshold).map(change => {
       const sign = change.delta > 0 ? '+' : '';
       const line = `${escapeHtml(change.from)} → ${escapeHtml(change.to)}: ${escapeHtml(change.scale)} ${sign}${change.delta}`;
@@ -820,9 +831,16 @@ export async function init() {
     }).join('');
     const result = await context.Popup.show.confirm(
       'Скачок в отношениях',
-      `<p>Анализатор предлагает крупное изменение (порог ${settings.largeChangeThreshold}). Крупные выделены:</p><ul style="text-align:left;margin:0;padding-left:18px">${rows}</ul><p>Применить весь анализ этого ответа?</p>`,
+      `<p>Анализатор предлагает крупное изменение (порог ${settings.largeChangeThreshold}). Крупные выделены:</p><ul style="text-align:left;margin:0;padding-left:18px">${rows}</ul><p>Воспоминания и напряжения из этого ответа сохранятся при любом выборе, кроме «Отменить».</p>`,
+      {
+        okButton: 'Применить всё',
+        cancelButton: 'Отменить',
+        customButtons: [{ text: 'Только мелкие', result: context.POPUP_RESULT.CUSTOM1, tooltip: 'Отбросить крупные изменения шкал, остальное применить' }],
+      },
     );
-    return result === context.POPUP_RESULT.AFFIRMATIVE;
+    if (result === context.POPUP_RESULT.AFFIRMATIVE) return operations;
+    if (result === context.POPUP_RESULT.CUSTOM1) return smallOnly;
+    return null;
   }
 
   /** Ask the user about unregistered scene participants. Returns [] / accepted list, or null if analysis was cancelled. */
@@ -867,7 +885,10 @@ export async function init() {
     const isStale = () => expectedEpoch !== chatEpoch || SillyTavern.getContext().getCurrentChatId() !== sourceChatId
       || fingerprint(SillyTavern.getContext().chat?.[messageIndex]?.mes) !== textHash;
     if (isStale()) return skip('чат или текст сообщения изменились, пока модель отвечала');
-    if (!await confirmLargeChanges(result.operations)) return skip('скачок отклонён пользователем');
+    const confirmedOperations = await confirmLargeChanges(result.operations);
+    if (!confirmedOperations) return skip('скачок отклонён пользователем');
+    if (confirmedOperations.length !== result.operations.length) logEvent('info', `${label}: крупные изменения отброшены, применяются только мелкие`);
+    result.operations = confirmedOperations;
     if (isStale()) return skip('чат или текст сообщения изменились');
     const acceptedNewCharacters = await confirmNewCharacters(result.newCharacters, ctx);
     if (acceptedNewCharacters === null) return skip('анализ отменён');
@@ -875,7 +896,8 @@ export async function init() {
     const transactionId = `message:${messageIndex}:${textHash}`;
     let next = state.operations.some(operation => operation.messageId === String(messageIndex))
       ? rollbackMessage(state, String(messageIndex)) : state;
-    const applied = applyAnalysisResult(next, result, { transactionId, messageId: String(messageIndex), messageIndex }, acceptedNewCharacters);
+    const applied = applyAnalysisResult(next, result, { transactionId, messageId: String(messageIndex), messageIndex }, acceptedNewCharacters,
+      { linkedScales: settings.linkedScales !== false });
     next = applied.state;
     const operations = applied.operations;
     if (!operations.length) return skip('модель не нашла изменений в отношениях');

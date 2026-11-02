@@ -12,11 +12,13 @@ const SCALE_HINTS = {
   trust: { high: 'верит на слово, открывается', mid: 'прислушивается', low: 'осторожное доверие', neg: 'подозревает' },
   friendship: { high: 'свой человек', mid: 'товарищеское тепло', low: 'приязнь', neg: 'отчуждение' },
   respect: { high: 'восхищается', mid: 'ценит', low: 'признание', neg: 'пренебрегает' },
-  fear: { high: 'боится, избегает', mid: 'осторожна', low: 'тревожность', neg: '' },
+  fear: { high: 'боится, избегает', mid: 'осторожна', low: 'тревожность', neg: 'чувствует себя рядом в безопасности' },
   resentment: { high: 'глубокая обида', mid: 'копит недовольство', low: 'упрёк', neg: '' },
   hostility: { high: 'открытая вражда', mid: 'колкости, сопротивление', low: 'неприязнь', neg: '' },
   jealousy: { high: 'ревнует, собственничество', mid: 'следит за соперником', low: 'тревога о месте', neg: '' },
   dependency: { high: 'не представляет жизни без него', mid: 'опирается во всём', low: 'привычка', neg: '' },
+  approval: { high: 'всецело одобряет его поступки и выбор', mid: 'одобряет', low: 'скорее одобряет', neg: 'осуждает его поступки' },
+  guilt: { high: 'мучительное чувство вины перед ним', mid: 'чувствует вину, хочет загладить', low: 'укол совести', neg: '' },
 };
 
 function describeScale(id, value) {
@@ -49,8 +51,9 @@ export function selectRuntimePrompt(state, options = {}) {
   for (const relation of selected) {
     const from = state.entities[relation.from]?.name || relation.from;
     const to = state.entities[relation.to]?.name || relation.to;
+    const hidden = new Set(relation.hiddenScales ?? []);
     const scales = Object.entries(relation.scales)
-      .filter(([id, value]) => (!scaleSet || scaleSet.has(id)) && (options.includeNeutral || value !== 0))
+      .filter(([id, value]) => !hidden.has(id) && (!scaleSet || scaleSet.has(id)) && (options.includeNeutral || value !== 0))
       .map(([id, value]) => {
         const hint = describeScale(id, value);
         return `${id}=${value}${hint}`;

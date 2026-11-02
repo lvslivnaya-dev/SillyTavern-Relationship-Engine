@@ -40,5 +40,7 @@ test('analysis skips persona-subject operations regardless of model output', () 
   const incoming = Object.values(applied.state.relationships).find(relation => relation.from === 'b' && relation.to === 'a');
   assert.equal(outgoing.scales.trust, 0);
   assert.equal(incoming.scales.trust, 4);
-  assert.equal(applied.operations.length, 1);
+  assert.ok(applied.operations.every(operation => operation.payload.relationshipId === incoming.id),
+    'ни одной операции, включая связанные шкалы, на исходящей линии персоны');
+  assert.ok(Object.values(outgoing.scales).every(value => value === 0));
 });

@@ -1,6 +1,6 @@
 ﻿import {
   button, characterId, characterName, clamp, createFacade, dispatch, downloadJson, element,
-  ensureContainer, formatTime, getPair, metricDefinitions, nextControlId, normalizeSnapshot, pairId, pairLabel, pairSource, pairTarget,
+  ensureContainer, formatTime, getPair, metricDefinitions, visibleMetricDefinitions, nextControlId, normalizeSnapshot, pairId, pairLabel, pairSource, pairTarget,
 } from './helpers.js';
 import { collectRecords, filterRecords, triangleEdges } from '../core/records.js';
 
@@ -31,6 +31,7 @@ export function createRelationshipStudio(options = {}) {
   let toolsOpen = false; // phone only: persona/pair block is collapsible
   // Overview sections; character-to-character lines start collapsed to keep the screen clean.
   const folds = { characters: false, personaLines: true, characterLines: false, allLines: true };
+  let scaleEditorPairId = null; // overview card whose scale checklist is open
   const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
 
   const style = element('style', { text: STYLE + `
@@ -74,6 +75,9 @@ export function createRelationshipStudio(options = {}) {
     .relationship-card>details>summary{cursor:pointer;font-weight:600;margin-bottom:6px}
     .pair-swap{justify-self:center;display:grid;place-items:center;width:30px;height:30px;min-height:30px;padding:0;font-size:15px;line-height:1;border-radius:8px}
     .pair-swap:disabled{opacity:.4;cursor:default}
+    .scale-editor-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px}
+    .scale-editor-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--rs-line);border-radius:8px;cursor:pointer;font-size:13px}
+    .scale-editor-item input{width:14px;height:14px;margin:0;flex:0 0 auto}
     .mobile-tools{display:none}
     .sidebar-tools>summary{display:none}
     .factors-layer{position:fixed;left:0;right:0;top:0;height:100%;z-index:2147483001;display:grid;place-items:center;padding:16px;background:rgba(0,0,0,.5)}
@@ -586,11 +590,17 @@ export function createRelationshipStudio(options = {}) {
     const grid = element('div', { className: 'relationship-cards', style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,350px),1fr))', gap: '16px' } });
     for (const pair of pairs) {
       const hiddenFromWidget = (snapshot.ui?.hiddenRelationshipIds ?? []).includes(pairId(pair));
+      const editingScales = scaleEditorPairId === pairId(pair);
+      const hiddenCount = (pair.hiddenScales ?? []).length;
       const card = element('article', { className: 'card relationship-card' }, [
         element('h3', { text: pairLabel(snapshot, pair) }),
-        renderOverview(pair),
+        editingScales ? renderScaleEditor(pair) : renderOverview(pair),
         element('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--rs-line, #303a49)' } }, [
           button('Факторы роста', 'btn', () => openFactors(pairId(pair))),
+          button(editingScales ? 'Готово' : `Шкалы${hiddenCount ? ` (скрыто ${hiddenCount})` : ''}`, editingScales ? 'btn primary' : 'btn', () => {
+            scaleEditorPairId = editingScales ? null : pairId(pair);
+            render();
+          }, 'Выбрать, какие шкалы есть у этой линии'),
           button(hiddenFromWidget ? 'Показать в виджете' : 'Скрыть из виджета', 'btn', () => act('onToggleWidgetPair', { relationshipId: pairId(pair) }, 'widget-pair-toggle')),
           button('Удалить линию', 'btn', () => act('onRemovePair', {
             sourceId: pairSource(pair), targetId: pairTarget(pair),
@@ -600,6 +610,33 @@ export function createRelationshipStudio(options = {}) {
       grid.append(card);
     }
     return grid;
+  }
+
+  /** Per-line scale visibility: hidden scales are not shown, sent to the model or changed by analysis. */
+  function renderScaleEditor(pair) {
+    const hidden = new Set(pair.hiddenScales ?? []);
+    const definitions = metricDefinitions(snapshot, pair);
+    const box = element('div', { className: 'scale-editor' }, [
+      element('p', { className: 'muted', style: { fontSize: '11px', margin: '0 0 8px' }, text: 'Отметьте шкалы, которые нужны этой линии. Скрытые шкалы не показываются, не отправляются модели и не меняются анализом. Значения сохраняются — шкалу можно вернуть.' }),
+    ]);
+    const list = element('div', { className: 'scale-editor-list' });
+    for (const definition of definitions) {
+      const input = element('input', { type: 'checkbox', checked: !hidden.has(definition.key) });
+      input.addEventListener('change', async () => {
+        const next = new Set(hidden);
+        if (input.checked) next.delete(definition.key); else next.add(definition.key);
+        if (next.size >= definitions.length) {
+          input.checked = true;
+          setStatus('Хотя бы одна шкала должна остаться', true);
+          return;
+        }
+        try { await act('onSetHiddenScales', { relationshipId: pairId(pair), hiddenScales: [...next] }, 'scales-hide'); }
+        catch (error) { input.checked = !input.checked; setStatus(error?.message || 'Не удалось изменить шкалы', true); }
+      });
+      list.append(element('label', { className: 'scale-editor-item' }, [input, definition.label]));
+    }
+    box.append(list);
+    return box;
   }
 
   function renderLorebooks() {
@@ -638,7 +675,7 @@ export function createRelationshipStudio(options = {}) {
   function renderOverview(pair) {
     const metrics = element('div', { className: 'card' }, [element('h3', { text: 'Показатели отношений' })]);
     const values = pair.metrics || pair.scales || {};
-    for (const definition of metricDefinitions(snapshot, pair)) {
+    for (const definition of visibleMetricDefinitions(snapshot, pair)) {
       const value = Number(values[definition.key] ?? definition.default ?? 0);
       const range = element('input', { id: nextControlId('rs-metric'), type: 'range', min: definition.min, max: definition.max, step: definition.step || 1, value });
       const output = element('output', { text: value });

@@ -18,7 +18,7 @@ test('analysis records friendship, memories and tensions with message rollback',
     memories: [{ subjectId: 'b', objectId: 'a', text: 'Анна помогла', intensity: 4 }],
     tensions: [{ subjectId: 'c', objectId: 'a', text: 'Боится остаться в стороне', intensity: 3 }],
   }));
-  const applied = applyAnalysisResult(setup(), result, { messageId: '1' });
+  const applied = applyAnalysisResult(setup(), result, { messageId: '1' }, [], { linkedScales: false });
   assert.equal(applied.operations.length, 3);
   assert.equal(Object.values(applied.state.relationships).length, 3);
   assert.ok(Object.values(applied.state.relationships).some(relation => relation.memories.length === 1));
@@ -35,7 +35,7 @@ test('legacy scale config is expanded on import without losing existing values',
     createOperation('relationship.upsert', { from: 'a', to: 'b' }),
   ]);
   const imported = importState(state);
-  assert.equal(imported.config.scales.length, 11);
+  assert.equal(imported.config.scales.length, 13);
   assert.equal(Object.values(imported.relationships)[0].scales.friendship, 0);
   assert.equal(Object.values(imported.relationships)[0].scales.love, 0);
 });

@@ -8,7 +8,7 @@ const FALLBACK_METRICS = [
 const METRIC_LABELS = {
   affection: 'Привязанность', love: 'Любовь', trust: 'Доверие', respect: 'Уважение', attraction: 'Влечение',
   friendship: 'Дружба', fear: 'Страх', resentment: 'Обида', hostility: 'Враждебность',
-  jealousy: 'Ревность', dependency: 'Зависимость',
+  jealousy: 'Ревность', dependency: 'Зависимость', approval: 'Одобрение', guilt: 'Вина',
 };
 
 let controlId = 0;
@@ -60,6 +60,12 @@ export function metricDefinitions(snapshot, pair) {
     return keys.map((key) => ({ key, label: key === 'affinity' ? 'Привязанность' : METRIC_LABELS[key] || titleCase(key), min: -100, max: 100 }));
   }
   return Object.entries(METRIC_LABELS).map(([key, label]) => ({ key, label, min: -100, max: 100 }));
+}
+
+/** Scales of one line without the ones hidden on that line. */
+export function visibleMetricDefinitions(snapshot, pair) {
+  const hidden = new Set(pair?.hiddenScales ?? []);
+  return metricDefinitions(snapshot, pair).filter(definition => !hidden.has(definition.key));
 }
 
 export function titleCase(value) {

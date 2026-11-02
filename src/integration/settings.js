@@ -8,6 +8,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   injectPrompt: true,
   confirmLargeChanges: true,
   largeChangeThreshold: 12,
+  linkedScales: true,
   maxPromptCharacters: 2400,
   analysisMaxCharacters: 12000,
   widget: {

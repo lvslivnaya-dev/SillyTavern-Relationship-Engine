@@ -6,7 +6,7 @@ export const MAX_ENTITIES = 1_000;
 export const MAX_RELATIONSHIPS = 10_000;
 const OPERATION_TYPES = new Set([
   'entity.upsert', 'entity.remove', 'relationship.upsert', 'relationship.remove', 'scale.delta', 'scale.set', 'factors.set', 'record.toggle',
-  'memory.add', 'memory.remove', 'tension.add', 'tension.remove', 'stage.set',
+  'memory.add', 'memory.remove', 'tension.add', 'tension.remove', 'stage.set', 'scales.hide',
 ]);
 
 export const DEFAULT_SCALES = Object.freeze([
@@ -21,6 +21,8 @@ export const DEFAULT_SCALES = Object.freeze([
   Object.freeze({ id: 'hostility', label: 'Враждебность', default: 0 }),
   Object.freeze({ id: 'jealousy', label: 'Ревность', default: 0 }),
   Object.freeze({ id: 'dependency', label: 'Зависимость', default: 0 }),
+  Object.freeze({ id: 'approval', label: 'Одобрение', default: 0 }),
+  Object.freeze({ id: 'guilt', label: 'Вина', default: 0 }),
 ]);
 
 /** Clamp a relationship scale value to the engine range. */
@@ -107,6 +109,9 @@ export function validateState(state) {
       if (typeof value !== 'number' || value < VALUE_MIN || value > VALUE_MAX) errors.push(`Relationship ${id} has invalid scale value`);
     }
     if (!Array.isArray(relation?.memories) || !Array.isArray(relation?.tensions)) errors.push(`Relationship ${id} collections must be arrays`);
+    if (relation?.hiddenScales != null && (!Array.isArray(relation.hiddenScales) || relation.hiddenScales.some(scaleId => !scaleIds.has(scaleId)))) {
+      errors.push(`Relationship ${id} hiddenScales must list known scales`);
+    }
     if (relation?.factors != null) {
       if (!Array.isArray(relation.factors)) errors.push(`Relationship ${id} factors must be an array`);
       else for (const factor of relation.factors) {

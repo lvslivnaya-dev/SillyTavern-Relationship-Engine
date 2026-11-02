@@ -5,7 +5,7 @@ import { createDefaultState, createEntity, createRelationship, getScale } from '
 const TYPES = new Set([
   'entity.upsert', 'entity.remove', 'relationship.upsert', 'relationship.remove',
   'scale.delta', 'scale.set', 'factors.set', 'record.toggle',
-  'memory.add', 'memory.remove', 'tension.add', 'tension.remove', 'stage.set',
+  'memory.add', 'memory.remove', 'tension.add', 'tension.remove', 'stage.set', 'scales.hide',
 ]);
 
 /** Normalize and bound a growth-factor list: { scaleId, direction: up|down, text }. */
@@ -163,6 +163,17 @@ function applyMutation(next, operation) {
     case 'stage.set':
       relationshipFor(next, payload).stage = payload.stage ?? null;
       break;
+    case 'scales.hide': {
+      // Per-line visibility: hidden scales are not shown, injected or changed by analysis.
+      const relation = relationshipFor(next, payload);
+      if (!Array.isArray(payload.hiddenScales)) throw new TypeError('hiddenScales must be an array');
+      const known = new Set(next.config.scales.map(scale => scale.id));
+      const hidden = [...new Set(payload.hiddenScales.map(String))].filter(scaleId => known.has(scaleId));
+      if (hidden.length >= known.size) throw new RangeError('At least one scale must stay visible');
+      if (hidden.length) relation.hiddenScales = hidden;
+      else delete relation.hiddenScales;
+      break;
+    }
     default:
       throw new RangeError(`Unsupported operation type: ${operation.type}`);
   }

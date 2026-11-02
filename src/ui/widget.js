@@ -1,6 +1,6 @@
 ﻿import {
   button, clamp, createFacade, dispatch, element, ensureContainer, formatTime, getPair,
-  metricDefinitions, normalizeSnapshot, pairId, pairLabel, pairTarget,
+  visibleMetricDefinitions, normalizeSnapshot, pairId, pairLabel, pairTarget,
 } from './helpers.js';
 
 const STYLE = `
@@ -150,7 +150,7 @@ export function createRelationshipWidget(options = {}) {
       card.append(element('summary', { text: pairLabel(snapshot, pair) }));
       const metrics = element('div', { className: 'metrics' });
       const values = pair.metrics || pair.scales || {};
-      const definitions = metricDefinitions(snapshot, pair);
+      const definitions = visibleMetricDefinitions(snapshot, pair);
       for (const definition of definitions) {
         const value = Number(values[definition.key] ?? 0);
         const percentage = clamp((value - Number(definition.min)) / (Number(definition.max) - Number(definition.min)) * 100, 0, 100);
