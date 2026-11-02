@@ -449,7 +449,7 @@ export function createRelationshipStudio(options = {}) {
       }
       list.append(characterRow);
     }
-    const bulkBar = element('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '10px 0 0' } });
+    const bulkBar = element('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '0 0 10px' } });
     const allSelected = removableCharacters.length > 0 && selectedForRemoval.size === removableCharacters.length;
     const selectAllButton = button(allSelected ? 'Снять всех' : 'Выбрать всех', 'btn', () => {
       if (selectedForRemoval.size === removableCharacters.length && removableCharacters.length) selectedForRemoval.clear();
@@ -480,7 +480,7 @@ export function createRelationshipStudio(options = {}) {
       addInput.value = '';
       aliasInput.value = '';
     });
-    box.append(list, bulkBar, addForm);
+    box.append(bulkBar, list, addForm);
     return box;
   }
 
