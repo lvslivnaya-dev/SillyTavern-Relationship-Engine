@@ -95,6 +95,7 @@ export async function init() {
       ...state,
       headcanonPairs: listHeadcanonPairs(state),
       sceneHeadcanons: [...sceneHeadcanons],
+      headcanonInfo: { ...headcanonInfo },
       pairs: Object.values(state.relationships).filter(relation => relation.from !== persona),
       widgetPairs: Object.values(state.relationships)
         .filter(relation => relation.from !== persona)
@@ -202,11 +203,15 @@ export async function init() {
   // Headcanons picked for the current scene; refreshed before every generation
   // (generate interceptor) and when the chat or the headcanons change.
   let sceneHeadcanons = [];
+  // Why the preview shows what it shows: how many are on, how many fit the scene, how they were picked.
+  let headcanonInfo = { enabled: 0, picked: 0, method: 'mentions', disabled: false };
 
   async function prepareHeadcanons(chat = SillyTavern.getContext().chat) {
+    const enabled = listHeadcanonPairs(state).reduce((sum, pair) => sum + pair.enabledCount, 0);
     try {
-      if (settings.sendHeadcanons === false || !Object.keys(state.ui?.headcanons ?? {}).length) {
+      if (settings.sendHeadcanons === false || !enabled) {
         sceneHeadcanons = [];
+        headcanonInfo = { enabled, picked: 0, method: 'mentions', disabled: settings.sendHeadcanons === false };
         return;
       }
       const sceneText = recentSceneText(chat);
@@ -215,9 +220,11 @@ export async function init() {
         limit: Math.max(1, Math.min(30, Number(settings.headcanonLimit) || 8)),
         maxCharacters: 1500,
       });
+      headcanonInfo = { enabled, picked: sceneHeadcanons.length, method: 'mentions', disabled: false };
     } catch (error) {
       logEvent('error', 'Не удалось отобрать хедканоны для сцены', error);
       sceneHeadcanons = [];
+      headcanonInfo = { enabled, picked: 0, method: 'mentions', disabled: false, error: error?.message ?? String(error) };
     }
   }
 
@@ -985,9 +992,10 @@ export async function init() {
       'Персонажей / линий': `${Object.keys(state.entities).length} / ${Object.keys(state.relationships).length}`,
     }),
     onClearDiagnostics: () => { clearLog(); notify(); },
+    onRefreshScene: async () => { await prepareHeadcanons(); refreshPrompt(); },
     onAuxProfiles: () => listAuxProfiles(SillyTavern.getContext()),
     onAuxPurposes: () => ({ ...AUX_PURPOSES }),
-    onFetchAuxModels: ({ url, key }) => fetchAuxModels(url, key),
+    onFetchAuxModels: ({ url, key }) => fetchAuxModels(SillyTavern.getContext(), url, key),
     /** A tiny request with the settings being edited (not yet saved). */
     onTestAux: async ({ aux }) => {
       const candidate = normalizeAux({ ...settings.aux, ...aux });

@@ -38,6 +38,7 @@ export function createRelationshipStudio(options = {}) {
   let triangleSetupId = null; // triangle whose setup sheet is open in the factors layer
   let openHeadcanonKey = null; // headcanons tab: the pair being viewed ("a|b")
   let editingHeadcanonId = null;
+  const promptSectionsOpen = new Set(['lines']); // "What the model gets": open sections
   const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
 
   const style = element('style', { text: STYLE + `
@@ -92,7 +93,19 @@ export function createRelationshipStudio(options = {}) {
     .pair-swap:disabled{opacity:.4;cursor:default}
     .pair-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:14px}
     .pair-card-head h3{margin:0;min-width:0;overflow-wrap:anywhere}
-    .pair-flags{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:0 0 auto}
+    .pair-flags{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px}
+    .prompt-section{border-top:1px solid var(--rs-line);padding:8px 0}
+    .prompt-section>summary{cursor:pointer;font-weight:600;font-size:13px}
+    .prompt-section .btn{min-height:30px;padding:4px 10px;font-size:12px;margin:2px 0 6px}
+    .prompt-lines{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0 0;max-height:220px;overflow:auto;font-size:11px}
+    .card-corner{position:absolute;top:10px;right:10px;display:flex;gap:6px}
+    .card-corner .icon{width:32px;height:32px;min-height:32px;padding:0;font-size:15px;display:grid;place-items:center;line-height:1}
+    .card-corner .remove-line:hover{border-color:var(--rs-danger);color:var(--rs-danger)}
+    .eye-toggle{position:relative}
+    .eye-toggle.off{opacity:.55}
+    .eye-toggle.off::after{content:'';position:absolute;left:6px;right:6px;top:50%;height:2px;background:currentColor;transform:rotate(-35deg)}
+    .relationship-card{position:relative}
+    .relationship-card .pair-card-head{padding-right:78px}
     .headcanon-pairs{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,240px),1fr));gap:10px}
     .headcanon-pair{display:grid;gap:4px;text-align:left;padding:12px 14px;border:1px solid var(--rs-line);border-radius:10px;background:var(--rs-inset);color:var(--rs-text);cursor:pointer;font:inherit}
     .headcanon-pair:hover,.headcanon-pair:focus-visible{border-color:var(--rs-accent);outline:none}
@@ -972,10 +985,17 @@ export function createRelationshipStudio(options = {}) {
         if (selectInput.checked) selectedPairs.add(pairId(pair)); else selectedPairs.delete(pairId(pair));
         render();
       });
+      // Corner icons: the eye is crossed out while the line is hidden from the widget.
+      const eye = button('👁', `icon eye-toggle${hiddenFromWidget ? ' off' : ''}`, () => act('onToggleWidgetPair', { relationshipId: pairId(pair) }, 'widget-pair-toggle'),
+        hiddenFromWidget ? 'Не показывается в виджете — показать' : 'Показывается в виджете — скрыть');
+      eye.setAttribute('aria-pressed', String(!hiddenFromWidget));
+      const removeLine = button('×', 'icon remove-line', () => act('onRemovePair', {
+        sourceId: pairSource(pair), targetId: pairTarget(pair),
+      }, 'pair-remove'), 'Удалить линию');
       const card = element('article', { className: `card relationship-card${isSelected ? ' selected' : ''}` }, [
+        element('div', { className: 'card-corner' }, [eye, removeLine]),
         element('div', { className: 'pair-card-head' }, [
           element('label', { className: 'pair-title', title: 'Отметить для удаления' }, [selectInput, element('h3', { text: pairLabel(snapshot, pair) })]),
-          element('div', { className: 'pair-flags' }, [strangers, autoHead]),
         ]),
         editingScales ? renderScaleEditor(pair) : renderOverview(pair),
         element('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--rs-line, #303a49)' } }, [
@@ -985,11 +1005,8 @@ export function createRelationshipStudio(options = {}) {
             scaleEditorPairId = editingScales ? null : pairId(pair);
             render();
           }, 'Выбрать, какие шкалы есть у этой линии'),
-          button(hiddenFromWidget ? 'Показать в виджете' : 'Скрыть из виджета', 'btn', () => act('onToggleWidgetPair', { relationshipId: pairId(pair) }, 'widget-pair-toggle')),
-          button('Удалить линию', 'btn', () => act('onRemovePair', {
-            sourceId: pairSource(pair), targetId: pairTarget(pair),
-          }, 'pair-remove')),
         ]),
+        element('div', { className: 'pair-flags' }, [strangers, autoHead]),
       ]);
       grid.append(card);
     }
@@ -1260,7 +1277,14 @@ export function createRelationshipStudio(options = {}) {
       try { key = facade.invoke('onHeadcanonKey', { firstId: ids[0], secondId: ids[1] }); } catch { continue; }
       if (!seen.has(key)) seen.set(key, ids.map(id => nameOf(id)).join(' & '));
     }
-    return [...seen].map(([key, label]) => ({ key, label })).sort((left, right) => left.label.localeCompare(right.label, 'ru-RU'));
+    return personaPairsFirst([...seen].map(([key, label]) => ({ key, label })));
+  }
+
+  /** Pairs with the persona first, then character-to-character ones; alphabetical inside each group. */
+  function personaPairsFirst(pairs) {
+    const personaId = snapshot.personaId || snapshot.ui?.personaId || '';
+    const rank = pair => (personaId && pair.key.split('|').includes(personaId) ? 0 : 1);
+    return [...pairs].sort((left, right) => rank(left) - rank(right) || left.label.localeCompare(right.label, 'ru-RU'));
   }
 
   function renderHeadcanons() {
@@ -1300,7 +1324,7 @@ export function createRelationshipStudio(options = {}) {
       openPair,
     ]));
 
-    const pairs = snapshot.headcanonPairs || [];
+    const pairs = personaPairsFirst(snapshot.headcanonPairs || []);
     const list = element('div', { className: 'headcanon-pairs' });
     for (const pair of pairs) {
       const card = element('button', { type: 'button', className: 'headcanon-pair' }, [
@@ -1524,14 +1548,46 @@ export function createRelationshipStudio(options = {}) {
     });
     const preview = element('div', { className: 'card', style: { marginTop: '14px' } }, [element('h3', { text: 'Что получает модель' })]);
     preview.append(element('p', { className: 'muted', style: { fontSize: '11px' }, text: `Инъекция Narrator: ~${snapshot.promptTokens ?? 0} токенов. Анализ за сессию израсходовал ~${snapshot.analysisTokens ?? 0} токенов (запросы + ответы, включая размышления, если модель их возвращает). Пусто — проверьте, что связь не исключена персоной и значения не нулевые.` }));
-    const previewText = element('pre', {
-      style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: '0', maxHeight: '220px', overflow: 'auto', fontSize: '11px' },
-      text: snapshot.promptPreview || '—',
-    });
-    preview.append(previewText);
+    preview.append(...renderPromptSections(snapshot.promptPreview || ''));
     const wrapper = element('div');
     wrapper.append(form, renderAuxApi(), renderDataTransfer(), preview, renderDiagnostics());
     return wrapper;
+  }
+
+  /** The injection split by kind, each section foldable with a counter, so nothing has to be searched for. */
+  function renderPromptSections(text) {
+    const sections = [
+      ['rules', 'Правила: незнакомцы и треугольники', line => line.startsWith('strangers[') || line.startsWith('triangle ')],
+      ['memories', 'Воспоминания', line => /^(shared|secret)-memories/.test(line)],
+      ['tensions', 'Напряжения', line => /^(shared|secret)-tensions/.test(line)],
+      ['headcanons', 'Хедканоны', line => line.startsWith('headcanon[')],
+      ['lines', 'Линии и шкалы', () => true],
+    ];
+    const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+    const groups = new Map(sections.map(([key]) => [key, []]));
+    for (const line of lines) groups.get(sections.find(([, , test]) => test(line))[0]).push(line);
+    const order = ['lines', 'memories', 'tensions', 'headcanons', 'rules'];
+    const nodes = order.map(key => {
+      const [, title] = sections.find(([id]) => id === key);
+      const items = groups.get(key);
+      const details = element('details', { className: 'prompt-section' });
+      details.open = promptSectionsOpen.has(key);
+      details.addEventListener('toggle', () => { if (details.open) promptSectionsOpen.add(key); else promptSectionsOpen.delete(key); });
+      details.append(element('summary', { text: `${title} · ${items.length}` }));
+      if (key === 'headcanons') details.append(element('p', { className: 'muted', style: { fontSize: '11px', margin: '4px 0' }, text: headcanonStatusText() }), button('Подобрать к текущей сцене', 'btn', () => act('onRefreshScene', {}, 'scene-refresh')));
+      details.append(element('pre', { className: 'prompt-lines', text: items.join('\n') || '—' }));
+      return details;
+    });
+    if (!lines.length) nodes.unshift(element('p', { className: 'muted', text: text || 'Пока пусто.' }));
+    return nodes;
+  }
+
+  function headcanonStatusText() {
+    const info = snapshot.headcanonInfo ?? {};
+    if (info.disabled) return 'Отправка хедканонов выключена в настройках.';
+    if (!info.enabled) return 'Включённых хедканонов нет.';
+    if (info.error) return `Не удалось подобрать: ${info.error}`;
+    return `Включено: ${info.enabled}, подобрано к текущей сцене: ${info.picked}. Отбор: ${info.method === 'semantic' ? 'по смыслу' : 'оба участника пары упомянуты в последних сообщениях (персона — всегда)'}. Подбор обновляется перед каждой генерацией.`;
   }
 
   /** Auxiliary model for the extension's own requests: a SillyTavern profile or a custom URL. */
@@ -1580,7 +1636,7 @@ export function createRelationshipStudio(options = {}) {
     const customBlock = element('div', {}, [
       field('URL API', url, 'Базовый адрес OpenAI-совместимой точки, например https://api.openai.com/v1'),
       field('Ключ API', element('div', { className: 'row', style: { flexWrap: 'nowrap' } }, [key, reveal]),
-        'Хранится в настройках расширений SillyTavern на этом сервере; в журнал диагностики и экспорт чата не попадает. Если провайдер блокирует запросы из браузера (CORS), используйте профиль подключения.'),
+        'Хранится в настройках расширений SillyTavern на этом сервере; в журнал диагностики и экспорт чата не попадает. Запросы идут через сервер SillyTavern, поэтому блокировок CORS нет; в секреты таверны ключ не записывается.'),
       field('Модель', element('div', { className: 'row', style: { flexWrap: 'nowrap' } }, [model, fetchModels]), 'Заполните URL и ключ, затем получите список моделей.'),
       modelList,
     ]);

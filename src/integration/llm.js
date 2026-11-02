@@ -2,8 +2,8 @@
  * Routes the extension's own model requests to a cheaper "auxiliary" model:
  *  - 'profile': a SillyTavern Connection Manager profile — the request goes
  *    through the SillyTavern server and the key stays in its secrets;
- *  - 'custom': an OpenAI-compatible endpoint (URL + key + model) called from
- *    the browser; some providers block such requests (CORS).
+ *  - 'custom': an OpenAI-compatible endpoint (URL + key + model), also sent
+ *    through the SillyTavern server, so browser CORS does not apply.
  * Callers keep using context.generateRaw: routedContext() swaps only that method.
  */
 import { logEvent } from './diagnostics.js';
@@ -57,36 +57,52 @@ export async function auxGenerate(context, aux, messages) {
     return content;
   }
   if (!aux.url || !aux.model) throw new Error('Укажите URL и модель вспомогательного API.');
-  let response;
-  try {
-    response = await fetch(`${baseUrl(aux.url)}/chat/completions`, {
-      method: 'POST',
-      headers: authHeaders(aux.key),
-      body: JSON.stringify({ model: aux.model, messages, max_tokens: maxTokens, temperature: 0.3, stream: false }),
-    });
-  } catch (error) {
-    throw new Error(`Нет связи со вспомогательным API. Если адрес верный, провайдер, скорее всего, блокирует запросы из браузера (CORS) — подключите его через профиль подключения SillyTavern. (${error?.message ?? error})`);
-  }
-  if (!response.ok) throw new Error(`Вспомогательный API: HTTP ${response.status} ${(await safeText(response)).slice(0, 200)}`);
-  const data = await response.json();
+  // Sent through SillyTavern's own "Custom (OpenAI-compatible)" backend: the request
+  // leaves from the server, so browser CORS never applies. The key travels as a header
+  // of this request only and is not written to SillyTavern's secrets.
+  const data = await serverRequest(context, '/api/backends/chat-completions/generate', {
+    ...customSource(aux),
+    model: aux.model,
+    messages,
+    max_tokens: maxTokens,
+    temperature: 0.3,
+    stream: false,
+  });
+  if (data?.error) throw new Error(`Вспомогательный API: ${data.error.message ?? 'ошибка провайдера'}`);
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== 'string') throw new Error('Вспомогательный API вернул ответ без текста.');
   return content;
 }
 
-/** Model IDs offered by an OpenAI-compatible endpoint (GET /models). */
-export async function fetchAuxModels(url, key) {
+/** Model IDs of an OpenAI-compatible endpoint, listed through the SillyTavern server. */
+export async function fetchAuxModels(context, url, key) {
   if (!url) throw new Error('Сначала укажите URL.');
-  let response;
-  try {
-    response = await fetch(`${baseUrl(url)}/models`, { headers: authHeaders(key) });
-  } catch (error) {
-    throw new Error(`Нет связи с ${baseUrl(url)}: возможно, провайдер блокирует запросы из браузера (CORS). (${error?.message ?? error})`);
-  }
-  if (!response.ok) throw new Error(`HTTP ${response.status} ${(await safeText(response)).slice(0, 200)}`);
-  const data = await response.json();
+  const data = await serverRequest(context, '/api/backends/chat-completions/status', customSource({ url, key }));
+  if (data?.error) throw new Error(data.message || 'Провайдер не отдал список моделей. Проверьте URL и ключ.');
   const list = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
   return [...new Set(list.map(item => String(item?.id ?? item ?? '')).filter(Boolean))].sort();
+}
+
+function customSource(aux) {
+  return {
+    chat_completion_source: 'custom',
+    custom_url: baseUrl(aux.url),
+    // YAML is a superset of JSON; SillyTavern merges these headers over its own Authorization.
+    ...(aux.key ? { custom_include_headers: JSON.stringify({ Authorization: `Bearer ${aux.key}` }) } : {}),
+  };
+}
+
+async function serverRequest(context, path, body) {
+  let response;
+  try {
+    response = await fetch(path, { method: 'POST', headers: context.getRequestHeaders(), body: JSON.stringify(body) });
+  } catch (error) {
+    throw new Error(`Нет связи с сервером SillyTavern: ${error?.message ?? error}`);
+  }
+  const text = await safeText(response);
+  if (!response.ok) throw new Error(`Вспомогательный API: HTTP ${response.status} ${text.slice(0, 200)}`.trim());
+  try { return JSON.parse(text); }
+  catch { throw new Error(`Вспомогательный API вернул не JSON: ${text.slice(0, 120)}`); }
 }
 
 /** Connection Manager profiles usable for requests, as [{ id, name }]. */
@@ -101,10 +117,6 @@ export function listAuxProfiles(context) {
 
 function baseUrl(url) {
   return String(url).trim().replace(/\/+$/, '').replace(/\/(chat\/completions|models)$/, '');
-}
-
-function authHeaders(key) {
-  return { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) };
 }
 
 async function safeText(response) {
