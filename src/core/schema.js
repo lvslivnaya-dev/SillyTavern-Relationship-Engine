@@ -117,6 +117,7 @@ export function validateState(state) {
       || Object.entries(relation.pace).some(([scaleId, value]) => !scaleIds.has(scaleId) || (value !== 'fast' && value !== 'slow')))) {
       errors.push(`Relationship ${id} pace must map known scales to fast or slow`);
     }
+    if (relation?.goal != null && (typeof relation.goal !== 'string' || !relation.goal.trim())) errors.push(`Relationship ${id} goal must be non-empty text`);
     if (relation?.factors != null) {
       if (!Array.isArray(relation.factors)) errors.push(`Relationship ${id} factors must be an array`);
       else for (const factor of relation.factors) {

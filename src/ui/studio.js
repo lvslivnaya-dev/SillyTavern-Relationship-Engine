@@ -552,7 +552,30 @@ export function createRelationshipStudio(options = {}) {
     ]);
     const body = element('div', { className: 'factors-body' });
     const status = element('p', { className: 'muted factors-status', role: 'status' });
+    const setSheetStatus = (message, danger = false) => { status.textContent = message || ''; status.classList.toggle('danger', danger); };
     body.append(element('p', { className: 'muted', style: { fontSize: '11px', marginTop: '0' }, text: 'Что приближает или отдаляет эту связь. Факторы передаются анализатору: сцена, совпавшая с фактором, даёт изменение соответствующей шкалы в выбранную сторону.' }));
+
+    // End point of THIS directed line. The reverse line is a separate object with its own.
+    const lineName = pairLabel(snapshot, pair);
+    const goalField = element('textarea', { value: pair.goal ?? '', rows: 2, className: 'goal-field', 'aria-label': `Конечная точка линии ${lineName}`, placeholder: 'К чему в итоге придёт эта линия. Например: признаёт её равной и перестаёт опекать' });
+    const goalWish = element('input', { type: 'text', placeholder: 'Пожелание для подсказки (необязательно)', 'aria-label': 'Пожелание к конечной точке' });
+    const goalGenerate = button('Предложить', 'btn', async () => {
+      goalGenerate.disabled = true;
+      setSheetStatus('Подбираю конечную точку по лору и сценам…');
+      try {
+        const goal = await facade.invoke('onGeneratePairGoal', { sourceId: pairSource(pair), targetId: pairTarget(pair), wish: goalWish.value.trim() });
+        if (goal) goalField.value = goal;
+        setSheetStatus('Конечная точка предложена. Поправьте и нажмите «Сохранить».');
+      } catch (error) {
+        setSheetStatus(error?.message || 'Не удалось предложить конечную точку', true);
+      } finally { goalGenerate.disabled = false; }
+    });
+    body.append(element('div', { className: 'factors-generate goal-box' }, [
+      element('p', { className: 'section-title', style: { margin: '0 0 6px' }, text: 'Конечная точка' }),
+      element('p', { className: 'muted', style: { fontSize: '11px', margin: '0 0 6px' }, text: `Куда в итоге должна прийти именно линия ${lineName}. Обратное направление — отдельная линия со своей точкой. Модель получает её как далёкий ориентир: без спешки и только через события сюжета.` }),
+      goalField,
+      element('div', { className: 'factors-generate-row' }, [goalWish, goalGenerate]),
+    ]));
 
     const list = element('div', { className: 'factor-list' });
     function renderRows() {
@@ -597,7 +620,6 @@ export function createRelationshipStudio(options = {}) {
     ];
     for (const preset of presets) directionSelect.append(element('option', { value: preset.id, text: preset.label }));
     const customDirection = element('input', { type: 'text', placeholder: 'Опишите желаемое направление развития', 'aria-label': 'Своё направление' });
-    const setSheetStatus = (message, danger = false) => { status.textContent = message || ''; status.classList.toggle('danger', danger); };
     const generate = button('Сгенерировать по персонажу', 'btn', async () => {
       generate.disabled = true;
       setSheetStatus('Генерирую факторы по лору и сценам…');
@@ -605,6 +627,8 @@ export function createRelationshipStudio(options = {}) {
         await facade.invoke('onGenerateFactors', {
           sourceId: pairSource(pair), targetId: pairTarget(pair),
           directionId: directionSelect.value, customDirection: customDirection.value, replace: true,
+          // Generation closes the sheet: the end point typed so far is saved with the factors.
+          goal: goalField.value,
         });
         emit('factors-generate', {});
         setStatus('Факторы сгенерированы');
@@ -620,6 +644,7 @@ export function createRelationshipStudio(options = {}) {
           sourceId: pairSource(pair), targetId: pairTarget(pair),
           factors: factors.filter(factor => String(factor.text ?? '').trim()),
           pace,
+          goal: goalField.value,
         });
         emit('factors-save', {});
         setStatus('Факторы сохранены');
@@ -664,7 +689,7 @@ export function createRelationshipStudio(options = {}) {
         tropeHint,
       ]),
       element('div', { className: 'factors-generate' }, [
-        element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Автогенерация: учитывает лор подключённых книг и сцены с обоими персонажами. «Своё направление» — впишите текстом.' }),
+        element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Автогенерация: учитывает лорбук этих персонажей (их анкеты и общие записи), сцены с обоими и конечную точку линии. «Своё направление» — впишите текстом.' }),
         element('div', { className: 'factors-generate-row' }, [directionSelect, customDirection, generate]),
       ]),
       status,

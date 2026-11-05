@@ -153,10 +153,15 @@ function applyMutation(next, operation) {
     case 'factors.set': {
       const relation = relationshipFor(next, payload);
       relation.factors = normalizeFactors(payload.factors, next);
-      // Pace is optional in the payload: older operations without it leave the line's pace alone.
+      // Pace and goal are optional in the payload: operations without them leave the line's own alone.
       if (Object.hasOwn(payload, 'pace')) {
         const pace = normalizePace(payload.pace, next);
         if (Object.keys(pace).length) relation.pace = pace; else delete relation.pace;
+      }
+      // The end point belongs to this directed line only: A→B and B→A each keep their own.
+      if (Object.hasOwn(payload, 'goal')) {
+        const goal = String(payload.goal ?? '').replace(/\s+/g, ' ').trim().slice(0, 500);
+        if (goal) relation.goal = goal; else delete relation.goal;
       }
       break;
     }

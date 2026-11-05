@@ -26,7 +26,7 @@ import { getSettings } from './src/integration/settings.js';
 import { createHistoryBatches, rebuildWithoutAutomaticHistory, historyFingerprint, sampleHistory } from './src/integration/history.js';
 import { applyAnalysisResult, describeProposedChanges } from './src/integration/analysis-operations.js';
 import { loadLinkedLore, loadGroupLore, generationBooks, analyzeLorebookCharacters, canonKeys, namesMatch } from './src/integration/lorebooks.js';
-import { generateGrowthFactors, directionPresets, generateTriangleFactors, generateTriangleGoal, generateHeadcanons, matchingKeys } from './src/integration/growth.js';
+import { generateGrowthFactors, generatePairGoal, directionPresets, generateTriangleFactors, generateTriangleGoal, generateHeadcanons, matchingKeys } from './src/integration/growth.js';
 import { pairTropeFactors, pairTropePace, pairTropes, triangleTropeFactors, triangleTropes, tropeLabel } from './src/integration/tropes.js';
 import { getAnalysisTokenUsage } from './src/integration/analyzer.js';
 import { onChangeBusy, getBusy, resetBusy } from './src/integration/busy.js';
@@ -847,24 +847,30 @@ export async function init() {
     onAddCharacter: addCharacter,
     onSetAliases: setAliases,
     onSelectPair: selectPair,
-    onSetFactors: async ({ sourceId, targetId, factors, pace }) => {
+    onSetFactors: async ({ sourceId, targetId, factors, pace, goal }) => {
       const id = relationshipId(sourceId, targetId);
       if (!state.relationships[id]) throw new Error('Линия не найдена.');
       await commit(applyOperation(state, createOperation('factors.set', {
-        relationshipId: id, factors, ...(pace !== undefined ? { pace } : {}),
+        relationshipId: id, factors, ...(pace !== undefined ? { pace } : {}), ...(goal !== undefined ? { goal } : {}),
       }, { transactionId: uniqueId('manual'), reason: 'Ручное изменение факторов', timestamp: new Date().toISOString() })), true);
     },
-    onGenerateFactors: async ({ sourceId, targetId, directionId, customDirection, replace }) => {
+    onGeneratePairGoal: async ({ sourceId, targetId, wish }) => {
+      if (isGenerationActive()) await waitForGenerationEnd();
+      if (!state.relationships[relationshipId(sourceId, targetId)]) throw new Error('Сначала создайте линию.');
+      const loreContext = await loreAbout([sourceId, targetId]);
+      return generatePairGoal(routedContext(SillyTavern.getContext(), settings, 'generation'), state, sourceId, targetId, { loreContext, wish });
+    },
+    onGenerateFactors: async ({ sourceId, targetId, directionId, customDirection, replace, goal }) => {
       if (isGenerationActive()) await waitForGenerationEnd();
       const id = relationshipId(sourceId, targetId);
       if (!state.relationships[id]) throw new Error('Сначала создайте линию.');
       const loreContext = await loreAbout([sourceId, targetId]);
       const factors = await generateGrowthFactors(routedContext(SillyTavern.getContext(), settings, 'generation'), state, sourceId, targetId, {
-        directionId, customDirection, loreContext,
+        directionId, customDirection, loreContext, goal: goal ?? state.relationships[id].goal ?? '',
       });
       const merged = replace ? factors : [...(state.relationships[id].factors ?? []), ...factors];
       await commit(applyOperation(state, createOperation('factors.set', {
-        relationshipId: id, factors: merged,
+        relationshipId: id, factors: merged, ...(goal !== undefined ? { goal } : {}),
       }, { transactionId: uniqueId('manual'), reason: `Генерация факторов (${directionId})`, timestamp: new Date().toISOString() })), true);
       return factors;
     },

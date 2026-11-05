@@ -75,6 +75,7 @@ export function selectRuntimePrompt(state, options = {}) {
     const factors = options.includeFactors === false ? '' : (relation.factors || []).slice(0, 4)
       .map(factor => `${factor.direction === 'down' ? '-' : '+'}${factor.scaleId}: ${factor.text}`).join(' | ');
     if (factors) fields.push(`grow[${factors.trim()}]`);
+    if (options.includeFactors !== false && relation.goal) fields.push(`endpoint=${clip(relation.goal, 400)}`);
     relationLines.push(fields.filter(Boolean).join(';'));
   }
 
