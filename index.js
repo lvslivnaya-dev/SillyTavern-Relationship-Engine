@@ -1258,7 +1258,11 @@ export async function init() {
     const textHash = fingerprint(message.mes);
     if (!force && message.extra?.[MESSAGE_EXTRA_KEY]?.fingerprint === textHash) return skip('этот текст уже проанализирован');
     if (!force) await waitUntilVisible();
-    const sourceState = state;
+    // Analyse against the state WITHOUT this message's earlier result. A re-check
+    // (swipe back, edit, manual) told "already recorded" about the very memories
+    // it is about to roll back would leave them out, and they would be lost.
+    const sourceState = state.operations.some(operation => operation.messageId === String(messageIndex))
+      ? rollbackMessage(state, String(messageIndex)) : state;
     const loreContext = await loadLinkedLore(ctx, sourceState);
     if (expectedEpoch !== chatEpoch) return skip('чат сменился');
     logEvent('info', `${label}: анализ начат${force ? ' (вручную)' : ''}`);
