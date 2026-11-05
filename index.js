@@ -200,7 +200,7 @@ export async function init() {
 
   function assertHeadcanonPair(key) {
     const ids = headcanonPairIds(key);
-    if (ids.length !== 2 || ids.some(id => !state.entities[id])) throw new Error('Персонаж не найден.');
+    if (ids.length < 2 || ids.some(id => !state.entities[id])) throw new Error('Персонаж не найден.');
   }
 
   function isAutoHeadcanonsFor(key) {
@@ -997,7 +997,7 @@ export async function init() {
     onImport: importFromStudio,
     onExport: exportForStudio,
     onSettingsChange: changeSettings,
-    onHeadcanonKey: ({ firstId, secondId }) => headcanonKey(firstId, secondId),
+    onHeadcanonKey: ({ ids, firstId, secondId }) => headcanonKey(ids ?? [firstId, secondId]),
     onAutoHeadcanons: ({ key }) => isAutoHeadcanonsFor(key),
     onAddHeadcanons: async ({ key, texts }) => {
       assertHeadcanonPair(key);
@@ -1029,10 +1029,10 @@ export async function init() {
     onGenerateHeadcanons: async ({ key }) => {
       assertHeadcanonPair(key);
       if (isGenerationActive()) await waitForGenerationEnd();
-      const [firstId, secondId] = headcanonPairIds(key);
-      const loreContext = await loreAbout([firstId, secondId]);
+      const ids = headcanonPairIds(key);
+      const loreContext = await loreAbout(ids);
       const existing = (state.ui?.headcanons?.[key]?.items ?? []).map(item => item.text);
-      const texts = await generateHeadcanons(routedContext(SillyTavern.getContext(), settings, 'generation'), state, firstId, secondId, { loreContext, existing });
+      const texts = await generateHeadcanons(routedContext(SillyTavern.getContext(), settings, 'generation'), state, ids, { loreContext, existing });
       const { headcanons, added } = addHeadcanons(state, key, texts, { source: 'lore' });
       await commitHeadcanons(headcanons);
       return added;
@@ -1338,6 +1338,12 @@ export async function init() {
         const key = headcanonKey(present[left], present[right]);
         if (isAutoHeadcanons(targetState, key)) keys.push(key);
       }
+    }
+    // Groups of three or more: when every member is in the reply.
+    const here = new Set(present);
+    for (const key of Object.keys(targetState.ui?.headcanons ?? {})) {
+      const ids = headcanonPairIds(key);
+      if (ids.length > 2 && ids.every(id => here.has(id)) && isAutoHeadcanons(targetState, key)) keys.push(key);
     }
     return keys.slice(0, 12);
   }

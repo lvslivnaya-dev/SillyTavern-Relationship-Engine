@@ -1364,27 +1364,27 @@ export function createRelationshipStudio(options = {}) {
       options: [{ value: '', label: linePairs.length ? 'Выберите линию' : 'Линий пока нет' }, ...linePairs.map(item => ({ value: item.key, label: item.label }))],
       label: 'Линия', onChange: value => { if (value) { openHeadcanonKey = value; render(); } },
     });
-    const characterOptions = [{ value: '', label: 'Персонаж' }, ...(snapshot.characters || []).map(character => ({ value: characterId(character), label: characterName(character) }))];
-    let firstId = '';
-    let secondId = '';
-    const firstSelect = themedSelect({ options: characterOptions, label: 'Первый персонаж', onChange: value => { firstId = value; } });
-    const secondSelect = themedSelect({ options: characterOptions, label: 'Второй персонаж', onChange: value => { secondId = value; } });
-    const openPair = button('Открыть пару', 'btn primary', () => {
+    // Any two or more characters: a pair, or a group with its own headcanons.
+    const chosen = new Set();
+    const roster = element('div', { className: 'roster-list' });
+    for (const character of snapshot.characters || []) {
+      const box = element('input', { type: 'checkbox' });
+      box.addEventListener('change', () => { if (box.checked) chosen.add(characterId(character)); else chosen.delete(characterId(character)); });
+      roster.append(element('label', { className: 'roster-item' }, [box, element('span', { text: characterName(character) })]));
+    }
+    const openPair = button('Открыть', 'btn primary', () => {
       try {
-        openHeadcanonKey = facade.invoke('onHeadcanonKey', { firstId, secondId });
+        openHeadcanonKey = facade.invoke('onHeadcanonKey', { ids: [...chosen] });
         render();
-      } catch (error) { setStatus(error?.message || 'Выберите двух разных персонажей', true); }
+      } catch (error) { setStatus(error?.message || 'Выберите хотя бы двух персонажей', true); }
     });
     container.append(element('div', { className: 'card' }, [
-      element('h3', { text: 'Выбрать пару' }),
+      element('h3', { text: 'Выбрать пару или группу' }),
       element('div', { className: 'record-filters' }, [
         element('div', { className: 'field' }, [element('label', { text: 'Линия' }), lineSelect]),
       ]),
-      element('p', { className: 'muted', style: { fontSize: '11px', margin: '0 0 8px' }, text: 'Если линии между ними ещё нет — выберите двух персонажей:' }),
-      element('div', { className: 'record-filters' }, [
-        element('div', { className: 'field' }, [element('label', { text: 'Персонаж' }), firstSelect]),
-        element('div', { className: 'field' }, [element('label', { text: 'Персонаж' }), secondSelect]),
-      ]),
+      element('p', { className: 'muted', style: { fontSize: '11px', margin: '0 0 8px' }, text: 'Или отметьте персонажей: двое — пара, трое и больше — группа со своими хедканонами (например, о компании или семье).' }),
+      element('div', { className: 'roster' }, [roster]),
       openPair,
     ]));
 
@@ -1400,8 +1400,8 @@ export function createRelationshipStudio(options = {}) {
       list.append(card);
     }
     container.append(element('div', { className: 'card' }, [
-      element('h3', { text: 'Пары с хедканонами' }),
-      pairs.length ? list : element('div', { className: 'empty', text: 'Хедканонов пока нет. Выберите пару выше.' }),
+      element('h3', { text: 'Пары и группы с хедканонами' }),
+      pairs.length ? list : element('div', { className: 'empty', text: 'Хедканонов пока нет. Выберите пару или группу выше.' }),
     ]));
     return container;
   }

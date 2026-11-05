@@ -152,7 +152,7 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
   const headcanons = [];
   for (const item of result.headcanons ?? []) {
     const ids = [...new Set(item.participantIds.map(resolveId).filter(Boolean))];
-    if (ids.length !== 2) continue;
+    if (ids.length < 2 || ids.length !== item.participantIds.length) continue;
     const key = [...ids].sort().join('|');
     if (allowedHeadcanons.has(key)) headcanons.push({ key, text: item.text });
   }

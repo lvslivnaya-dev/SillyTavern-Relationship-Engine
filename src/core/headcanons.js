@@ -1,20 +1,26 @@
 /**
- * Headcanons: stable facts about how two characters relate ("he always walks her
- * home"). One fact per item, each can be switched off. They belong to an
- * unordered pair (A & B), so a pair may have headcanons before it has a line.
+ * Headcanons: stable facts about how two or more characters relate ("he always
+ * walks her home", "the three of them share one umbrella"). One fact per item,
+ * each can be switched off. They belong to an unordered group (A & B, or
+ * A & B & C), so a group may have headcanons before any line exists.
  *
- * Stored in state.ui.headcanons = { "a|b": { auto?: boolean, items: [...] } }.
+ * Stored in state.ui.headcanons = { "a|b": {…}, "a|b|c": { auto?: boolean, items: [...] } }.
  * ui is carried through journal replays untouched; automatic items remember
  * their messageId so a swipe, edit or deletion can drop them.
  */
 import { uniqueId } from './ids.js';
 
 export const MAX_HEADCANONS_PER_PAIR = 60;
+/** A group headcanon covers at most this many characters. */
+export const MAX_HEADCANON_GROUP = 8;
 const MAX_TEXT = 400;
 
-export function headcanonKey(firstId, secondId) {
-  if (!firstId || !secondId || firstId === secondId) throw new Error('Выберите двух разных персонажей.');
-  return [String(firstId), String(secondId)].sort().join('|');
+/** Unordered key of a pair or group: headcanonKey(a, b), headcanonKey(a, b, c) or headcanonKey([a, b, c]). */
+export function headcanonKey(...args) {
+  const ids = [...new Set((Array.isArray(args[0]) ? args[0] : args).filter(Boolean).map(String))];
+  if (ids.length < 2) throw new Error('Выберите хотя бы двух разных персонажей.');
+  if (ids.length > MAX_HEADCANON_GROUP) throw new Error(`В одной группе не больше ${MAX_HEADCANON_GROUP} персонажей.`);
+  return ids.sort().join('|');
 }
 
 export function headcanonPairIds(key) {

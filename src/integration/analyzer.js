@@ -155,7 +155,7 @@ export function parseAnalysis(raw) {
   data.participants = Array.isArray(data.participants) ? data.participants.map(String).slice(0, 20) : [];
   data.newCharacters = parseNewCharacters(data.newCharacters);
   data.headcanons = (Array.isArray(data.headcanons) ? data.headcanons : [])
-    .filter(item => Array.isArray(item?.participantIds) && item.participantIds.length === 2 && typeof item.text === 'string' && item.text.trim())
+    .filter(item => Array.isArray(item?.participantIds) && item.participantIds.length >= 2 && item.participantIds.length <= 8 && typeof item.text === 'string' && item.text.trim())
     .slice(0, 3)
     .map(item => ({ participantIds: item.participantIds.map(String), text: item.text.trim().slice(0, 400) }));
   return data;
@@ -300,7 +300,7 @@ function formatTranscript(messages, maxCharacters) {
 
 export const MIN_CONFIDENCE = 0.35;
 
-const HEADCANON_INSTRUCTIONS = ` Also return "headcanons": [{"participantIds":["a","b"],"text":"one short Russian fact"}] — at most 3 NEW stable facts about how one of the listed pairs relates, clearly established in this scene: a habit, a nickname, an unspoken rule, a revealed preference, a way of showing care or hostility. One fact per item. Not an event (events are memories), not a feeling level (that is a scale), never a guess. Only the listed pairs; an empty array is the normal answer.`;
+const HEADCANON_INSTRUCTIONS = ` Also return "headcanons": [{"participantIds":["a","b"],"text":"one short Russian fact"}] — at most 3 NEW stable facts about how one of the listed pairs or groups relates (participantIds = exactly its members), clearly established in this scene: a habit, a nickname, an unspoken rule, a revealed preference, a way of showing care or hostility. One fact per item. Not an event (events are memories), not a feeling level (that is a scale), never a guess. Only the listed pairs and groups; an empty array is the normal answer.`;
 
 function headcanonBlock(state, pairs) {
   if (!pairs?.length) return '';
@@ -310,7 +310,7 @@ function headcanonBlock(state, pairs) {
     const existing = (state.ui?.headcanons?.[key]?.items ?? []).map(item => item.text).slice(-12);
     return `${ids.join(' & ')} (${ids.map(name).join(' & ')})${existing.length ? `; already known: ${existing.join(' | ')}` : ''}`;
   });
-  return `\nPairs with automatic headcanons (participant IDs; do not repeat known facts):\n${lines.join('\n').slice(0, 6000)}\n`;
+  return `\nPairs and groups with automatic headcanons (participant IDs; do not repeat known facts):\n${lines.join('\n').slice(0, 6000)}\n`;
 }
 
 function triangleGoals(state) {
