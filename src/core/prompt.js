@@ -104,7 +104,17 @@ export function selectRuntimePrompt(state, options = {}) {
   });
 
   const ruleLines = [];
-  // Strangers are toggled by the user only; the flag is mutual, stored as a sorted "a|b" key.
+  // Characters who have not met the user persona: marked on the character, cleared on introduction.
+  const strangerPersona = personaId && state.entities[personaId]?.name;
+  if (strangerPersona) {
+    for (const entity of Object.values(state.entities)) {
+      if (!entity.stranger || entity.id === personaId) continue;
+      const name = entity.name;
+      const persona = strangerPersona;
+      ruleLines.push(`strangers[${name} & ${persona}]: ${name} has NOT met ${persona} yet — they do not know each other's names, history or private details. ${name} must not call ${persona} by name, recognise them or act on knowledge about them, and ${persona} knows nothing about ${name} either. They have to get acquainted in the story first: an introduction, a name overheard, or someone who knows both introducing them. Do not skip or rush the meeting.`);
+    }
+  }
+  // Older manual pair flags between two characters keep working as they did.
   for (const key of state.ui?.strangerPairs ?? []) {
     const [first, second] = key.split('|').map(id => state.entities[id]?.name);
     if (!first || !second) continue;

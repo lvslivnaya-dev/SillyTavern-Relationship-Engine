@@ -147,6 +147,12 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
       add(type, { relationshipId: id, item: { id: uniqueId(collection), text: item.text, intensity: item.intensity, createdAt: new Date().toISOString(), source: 'chat-analysis' } }, item.text);
     }
   }
+  // Introductions to the persona clear "has not met"; journaled with the reply, so a swipe restores it.
+  for (const reference of result.introduced ?? []) {
+    const id = resolveId(reference);
+    if (!id || !next.entities[id]?.stranger) continue;
+    add('stranger.set', { entityId: id, stranger: false }, `${next.entities[id].name} знакомится с персоной`);
+  }
   // Automatic headcanons: only for the pairs the caller allowed (options.headcanonKeys).
   const allowedHeadcanons = new Set(options.headcanonKeys ?? []);
   const headcanons = [];

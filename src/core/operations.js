@@ -6,6 +6,7 @@ const TYPES = new Set([
   'entity.upsert', 'entity.remove', 'relationship.upsert', 'relationship.remove',
   'scale.delta', 'scale.set', 'factors.set', 'record.toggle',
   'memory.add', 'memory.remove', 'tension.add', 'tension.remove', 'stage.set', 'scales.hide', 'record.update',
+  'stranger.set',
 ]);
 
 /** Where a factor came from: a line's own trope outranks a triangle's trope. */
@@ -76,7 +77,17 @@ function applyMutation(next, operation) {
   switch (operation.type) {
     case 'entity.upsert': {
       const entity = createEntity(payload.name, payload);
+      // Editing a character (aliases, avatar) must not forget that they have not met the persona.
+      if (next.entities[entity.id]?.stranger) entity.stranger = true;
       next.entities[entity.id] = entity;
+      break;
+    }
+    case 'stranger.set': {
+      // "Has not met the persona yet". Journaled, so the analyzer's "they got introduced"
+      // rolls back with its reply.
+      const entity = next.entities[payload.entityId];
+      if (!entity) break;
+      if (payload.stranger) entity.stranger = true; else delete entity.stranger;
       break;
     }
     case 'relationship.upsert': {

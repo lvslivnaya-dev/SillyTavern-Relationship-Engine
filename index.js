@@ -134,6 +134,8 @@ export async function init() {
         expanded: settings.widget.expanded,
         position: { x: settings.widget.x, y: settings.widget.y },
       },
+      legacyStrangers: (state.ui?.strangerPairs ?? []).filter(key => key.split('|').every(id => state.entities[id]))
+        .map(key => ({ key, label: key.split('|').map(id => state.entities[id].name).join(' & ') })),
       promptPreview: buildInjectionText(state, persona) || 'Пока пусто: нет связей с ненулевыми показателями.',
       promptTokens,
       analysisTokens: getAnalysisTokenUsage(),
@@ -716,6 +718,29 @@ export async function init() {
     return next;
   }
 
+  /**
+   * Older chats flagged a pair "strangers" by hand. A pair with the persona becomes
+   * the character's own "has not met the persona" mark (journaled, so the analyzer can
+   * clear it on introduction); the old pair flag is then dropped.
+   */
+  async function adoptLegacyPersonaStrangers() {
+    const personaId = state.ui?.personaId;
+    if (!personaId || !state.entities[personaId]) return;
+    const keys = (state.ui?.strangerPairs ?? []).filter(key => key.split('|').includes(personaId));
+    if (!keys.length) return;
+    let next = state;
+    for (const key of keys) {
+      const other = key.split('|').find(id => id !== personaId);
+      if (!other || !next.entities[other] || next.entities[other].stranger) continue;
+      next = applyOperation(next, createOperation('stranger.set', { entityId: other, stranger: true }, {
+        transactionId: uniqueId('manual'), reason: 'Перенос отметки «Незнакомы»', timestamp: new Date().toISOString(),
+      }));
+    }
+    next = structuredClone(next);
+    next.ui.strangerPairs = (next.ui.strangerPairs ?? []).filter(key => !keys.includes(key));
+    await commit(next, true);
+  }
+
   async function setTavernPersona({ avatarId }) {
     const context = SillyTavern.getContext();
     const personas = context.powerUserSettings?.personas ?? {};
@@ -747,6 +772,7 @@ export async function init() {
       next.ui.personaId = '';
     }
     await commit(next, true);
+    await adoptLegacyPersonaStrangers();
   }
 
   const callbacks = {
@@ -1037,15 +1063,17 @@ export async function init() {
       await commitHeadcanons(headcanons);
       return added;
     },
-    onToggleStrangers: async ({ relationshipId: id, strangers }) => {
-      const relation = state.relationships[id];
-      if (!relation) throw new Error('Линия не найдена.');
-      const key = [relation.from, relation.to].sort().join('|');
+    onToggleStranger: async ({ characterId: id, stranger }) => {
+      if (!state.entities[id]) throw new Error('Персонаж не найден.');
+      if (id === state.ui?.personaId) throw new Error('Персона не может быть незнакома сама с собой.');
+      await commit(applyOperation(state, createOperation('stranger.set', { entityId: id, stranger: Boolean(stranger) }, {
+        transactionId: uniqueId('manual'), reason: stranger ? 'Отмечен: не знаком с персоной' : 'Отмечен: знаком с персоной', timestamp: new Date().toISOString(),
+      })), true);
+    },
+    /** Older pair flags between two characters: they still work until removed here. */
+    onRemoveLegacyStrangers: async ({ key }) => {
       const next = structuredClone(state);
-      next.ui ??= {};
-      const pairs = new Set(next.ui.strangerPairs ?? []);
-      if (strangers) pairs.add(key); else pairs.delete(key);
-      next.ui.strangerPairs = [...pairs];
+      next.ui.strangerPairs = (next.ui.strangerPairs ?? []).filter(item => item !== key);
       await commit(next, true);
     },
     onSetHiddenScales: async ({ relationshipId: id, hiddenScales }) => {
@@ -1465,7 +1493,7 @@ export async function init() {
   listen(events.CHAT_CHANGED, () => {
     chatEpoch += 1;
     state = storage.load();
-    autoBindPersona(state).catch(error => console.error('[Relationship Engine] Persona auto-bind failed.', error));
+    autoBindPersona(state).then(adoptLegacyPersonaStrangers).catch(error => console.error('[Relationship Engine] Persona auto-bind failed.', error));
     sceneHeadcanons = [];
     refreshPrompt();
     notify();

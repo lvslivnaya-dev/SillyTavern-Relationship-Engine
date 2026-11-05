@@ -819,6 +819,7 @@ export function createRelationshipStudio(options = {}) {
         avatar,
         element('span', { style: { flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, text: name }),
         ...(isPersona ? [element('em', { className: 'muted', text: 'персона' })] : []),
+        ...(personaId && !isPersona ? [strangerToggle(character, name)] : []),
         editAliases,
       ]);
       if (!isPersona) {
@@ -873,8 +874,25 @@ export function createRelationshipStudio(options = {}) {
       addInput.value = '';
       aliasInput.value = '';
     });
-    box.append(bulkBar, list, addForm);
+    box.append(bulkBar, list, ...legacyStrangerNotice(), addForm);
     return box;
+  }
+
+  /** "Has not met the persona": the model keeps them strangers until an introduction; the analyzer clears it. */
+  function strangerToggle(character, name) {
+    const input = element('input', { type: 'checkbox', checked: Boolean(character.stranger), 'aria-label': `${name} не знаком с персоной` });
+    input.addEventListener('change', () => act('onToggleStranger', { characterId: characterId(character), stranger: input.checked }, 'stranger-toggle'));
+    return element('label', { className: 'strangers-toggle', title: 'Ещё не знаком с персоной: модель не даст ему знать её имя и прошлое, пока они не познакомятся в сюжете. Анализатор снимет отметку сам, когда в ответе они познакомятся.' }, [input, 'Незнаком с персоной']);
+  }
+
+  /** Older manual "strangers" flags between two characters: still active, removable here. */
+  function legacyStrangerNotice() {
+    const pairs = snapshot.legacyStrangers ?? [];
+    if (!pairs.length) return [];
+    return [element('div', { className: 'field', style: { marginTop: '10px' } }, [
+      element('p', { className: 'muted', style: { fontSize: '11px', margin: '0' }, text: 'Старые отметки «Незнакомы» между персонажами. Они по-прежнему работают; уберите, когда они познакомятся:' }),
+      element('div', { className: 'chips' }, pairs.map(pair => button(`${pair.label} ×`, 'btn', () => act('onRemoveLegacyStrangers', { key: pair.key }, 'legacy-strangers-remove'), `Убрать отметку: ${pair.label}`))),
+    ])];
   }
 
   /** Aliases of an existing character: other spellings, nicknames, translations (Майки, Mikey…). */
@@ -1035,9 +1053,6 @@ export function createRelationshipStudio(options = {}) {
       const editingScales = scaleEditorPairId === pairId(pair);
       const hiddenCount = (pair.hiddenScales ?? []).length;
       const strangerKey = [pairSource(pair), pairTarget(pair)].sort().join('|');
-      const strangersInput = element('input', { type: 'checkbox', checked: (snapshot.ui?.strangerPairs ?? []).includes(strangerKey) });
-      strangersInput.addEventListener('change', () => act('onToggleStrangers', { relationshipId: pairId(pair), strangers: strangersInput.checked }, 'strangers-toggle'));
-      const strangers = element('label', { className: 'strangers-toggle', title: 'Модель будет помнить, что они ещё не представлены друг другу и не знают имён. Действует в обе стороны. Снимите после знакомства.' }, [strangersInput, 'Незнакомы']);
       // Headcanons belong to the unordered pair, the same key as strangers.
       const headcanonCount = (snapshot.ui?.headcanons?.[strangerKey]?.items ?? []).length;
       const autoHeadInput = element('input', { type: 'checkbox', checked: Boolean(facade.invoke('onAutoHeadcanons', { key: strangerKey })) });
@@ -1070,7 +1085,7 @@ export function createRelationshipStudio(options = {}) {
             render();
           }, 'Выбрать, какие шкалы есть у этой линии'),
         ]),
-        element('div', { className: 'pair-flags' }, [strangers, autoHead]),
+        element('div', { className: 'pair-flags' }, [autoHead]),
       ]);
       grid.append(card);
     }
