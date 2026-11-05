@@ -241,3 +241,62 @@ LOREBOOK «${bookName}»:\n${text}`;
     .filter(item => registryIds.has(item.id) && item.aliases.length);
   return { characters, knownAliases };
 }
+
+/**
+ * Books a generation may read: linked in the "Лорбуки" tab, the character
+ * card's own book(s) and the chat's own book. Unknown names are skipped.
+ */
+export function generationBooks(context, state, cardWorlds = []) {
+  const available = new Set(context.getWorldInfoNames?.() ?? []);
+  const chatBook = context.chatMetadata?.world_info;
+  return [...new Set([...(state.ui?.linkedLorebooks ?? []), ...cardWorlds, ...(chatBook ? [chatBook] : [])])]
+    .filter(name => name && (!available.size || available.has(name)));
+}
+
+function wordStartPattern(keys) {
+  const escaped = keys.map(key => key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  // A key must start a word: "ран" finds "Рана", "Раном", not "охранник".
+  return escaped.length ? new RegExp(`(^|[^\\p{L}\\p{N}])(${escaped.join('|')})`, 'iu') : null;
+}
+
+/**
+ * Lore about specific characters, for generation (factors, end points, headcanons).
+ * Ranked so the budget goes to what matters for THESE characters:
+ *   3 — an entry keyed to one of them (their profile);
+ *   2 — an entry whose text names two or more of them (shared history, relationship pages);
+ *   1 — an entry whose text names one of them.
+ * Within a rank, the entry naming more of them comes first. Books that fail to load are skipped.
+ */
+export async function loadGroupLore(context, state, ids, { books = [], maxCharacters = 14000, matchKeys } = {}) {
+  const people = ids.map(id => state.entities?.[id]).filter(Boolean);
+  if (!people.length || !books.length) return '';
+  // canonKeys returns a Set: spread it, flatMap would keep the Set itself.
+  const keyed = people.map(person => new Set([person.name, ...(person.aliases ?? [])].flatMap(value => [...canonKeys(value)])));
+  const mention = people.map(person => wordStartPattern(matchKeys ? matchKeys(person) : [String(person.name).toLocaleLowerCase('ru-RU')]));
+  const found = [];
+  for (const name of books) {
+    let book;
+    try { book = await context.loadWorldInfo(name); }
+    catch (error) { console.warn(`[Relationship Engine] Lorebook «${name}» could not be read.`, error); continue; }
+    for (const entry of Object.values(book?.entries ?? {})) {
+      if (entry.disable || typeof entry.content !== 'string' || !entry.content.trim()) continue;
+      const keys = new Set([...(Array.isArray(entry.key) ? entry.key : []), ...(Array.isArray(entry.keysecondary) ? entry.keysecondary : [])].flatMap(value => [...canonKeys(value)]));
+      const isProfile = keyed.some(set => [...set].some(key => keys.has(key)));
+      const text = `${entry.comment ?? ''}\n${entry.content}`;
+      const named = mention.filter(pattern => pattern?.test(text)).length;
+      const rank = isProfile ? 3 : named >= 2 ? 2 : named === 1 ? 1 : 0;
+      if (!rank) continue;
+      found.push({ rank, named, book: name, title: entry.comment || entry.key?.join(', ') || 'Запись', content: entry.content.trim() });
+    }
+  }
+  found.sort((left, right) => right.rank - left.rank || right.named - left.named);
+  const sections = [];
+  let remaining = maxCharacters;
+  for (const entry of found) {
+    const text = `## ${entry.title} (${entry.book})\n${entry.content}`;
+    if (text.length > remaining) continue;
+    sections.push(text);
+    remaining -= text.length;
+  }
+  return sections.join('\n\n');
+}

@@ -25,8 +25,8 @@ import { clearRelationshipPrompt, updateRelationshipPrompt } from './src/integra
 import { getSettings } from './src/integration/settings.js';
 import { createHistoryBatches, rebuildWithoutAutomaticHistory, historyFingerprint, sampleHistory } from './src/integration/history.js';
 import { applyAnalysisResult, describeProposedChanges } from './src/integration/analysis-operations.js';
-import { loadLinkedLore, analyzeLorebookCharacters, canonKeys, namesMatch } from './src/integration/lorebooks.js';
-import { generateGrowthFactors, directionPresets, generateTriangleFactors, generateTriangleGoal, generateHeadcanons } from './src/integration/growth.js';
+import { loadLinkedLore, loadGroupLore, generationBooks, analyzeLorebookCharacters, canonKeys, namesMatch } from './src/integration/lorebooks.js';
+import { generateGrowthFactors, directionPresets, generateTriangleFactors, generateTriangleGoal, generateHeadcanons, matchingKeys } from './src/integration/growth.js';
 import { pairTropeFactors, pairTropePace, pairTropes, triangleTropeFactors, triangleTropes, tropeLabel } from './src/integration/tropes.js';
 import { getAnalysisTokenUsage } from './src/integration/analyzer.js';
 import { onChangeBusy, getBusy, resetBusy } from './src/integration/busy.js';
@@ -425,6 +425,12 @@ export async function init() {
   }
 
   /** Lorebooks bound to the current card(s) in SillyTavern (card's "world"). */
+  /** Lore about these characters from every book of the chat, for generation (factors, end points, headcanons). */
+  function loreAbout(ids) {
+    const ctx = SillyTavern.getContext();
+    return loadGroupLore(ctx, state, ids, { books: generationBooks(ctx, state, cardWorldNames()), matchKeys: matchingKeys });
+  }
+
   function cardWorldNames() {
     const ctx = SillyTavern.getContext();
     let cards = [];
@@ -775,7 +781,7 @@ export async function init() {
     onGenerateTriangleGoal: async ({ id, wish }) => {
       if (isGenerationActive()) await waitForGenerationEnd();
       const triangle = findTriangle(id);
-      const loreContext = await loadLinkedLore(SillyTavern.getContext(), state);
+      const loreContext = await loreAbout([triangle.centerId, triangle.firstId, triangle.secondId]);
       return generateTriangleGoal(routedContext(SillyTavern.getContext(), settings, 'generation'), state, triangle, { loreContext, wish });
     },
     onTriangleLines: ({ id }) => triangleLines(findTriangle(id)),
@@ -783,7 +789,7 @@ export async function init() {
       if (isGenerationActive()) await waitForGenerationEnd();
       const triangle = findTriangle(id);
       const lines = triangleLines(triangle);
-      const loreContext = await loadLinkedLore(SillyTavern.getContext(), state);
+      const loreContext = await loreAbout([triangle.centerId, triangle.firstId, triangle.secondId]);
       const factors = await generateTriangleFactors(routedContext(SillyTavern.getContext(), settings, 'generation'), state, triangle, lines, { goal: goal ?? triangle.goal, loreContext });
       return withLineIds(factors);
     },
@@ -852,7 +858,7 @@ export async function init() {
       if (isGenerationActive()) await waitForGenerationEnd();
       const id = relationshipId(sourceId, targetId);
       if (!state.relationships[id]) throw new Error('Сначала создайте линию.');
-      const loreContext = await loadLinkedLore(SillyTavern.getContext(), state);
+      const loreContext = await loreAbout([sourceId, targetId]);
       const factors = await generateGrowthFactors(routedContext(SillyTavern.getContext(), settings, 'generation'), state, sourceId, targetId, {
         directionId, customDirection, loreContext,
       });
@@ -1018,7 +1024,7 @@ export async function init() {
       assertHeadcanonPair(key);
       if (isGenerationActive()) await waitForGenerationEnd();
       const [firstId, secondId] = headcanonPairIds(key);
-      const loreContext = await loadLinkedLore(SillyTavern.getContext(), state);
+      const loreContext = await loreAbout([firstId, secondId]);
       const existing = (state.ui?.headcanons?.[key]?.items ?? []).map(item => item.text);
       const texts = await generateHeadcanons(routedContext(SillyTavern.getContext(), settings, 'generation'), state, firstId, secondId, { loreContext, existing });
       const { headcanons, added } = addHeadcanons(state, key, texts, { source: 'lore' });
