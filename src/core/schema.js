@@ -12,6 +12,7 @@ const OPERATION_TYPES = new Set([
 export const DEFAULT_SCALES = Object.freeze([
   Object.freeze({ id: 'affection', label: 'Привязанность', default: 0 }),
   Object.freeze({ id: 'love', label: 'Любовь', default: 0 }),
+  Object.freeze({ id: 'family', label: 'Семейная любовь', default: 0 }),
   Object.freeze({ id: 'trust', label: 'Доверие', default: 0 }),
   Object.freeze({ id: 'respect', label: 'Уважение', default: 0 }),
   Object.freeze({ id: 'attraction', label: 'Влечение', default: 0 }),

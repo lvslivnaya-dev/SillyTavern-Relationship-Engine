@@ -6,7 +6,7 @@ const FALLBACK_METRICS = [
 ];
 
 const METRIC_LABELS = {
-  affection: 'Привязанность', love: 'Любовь', trust: 'Доверие', respect: 'Уважение', attraction: 'Влечение',
+  affection: 'Привязанность', love: 'Любовь', family: 'Семейная любовь', trust: 'Доверие', respect: 'Уважение', attraction: 'Влечение',
   friendship: 'Дружба', fear: 'Страх', resentment: 'Обида', hostility: 'Враждебность',
   jealousy: 'Ревность', dependency: 'Зависимость', approval: 'Одобрение', guilt: 'Вина',
 };

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyAnalysisResult, describeProposedChanges } from '../src/integration/analysis-operations.js';
-import { createDefaultState, createOperation, applyOperations, rollbackMessage, importState } from '../src/core/index.js';
+import { DEFAULT_SCALES, createDefaultState, createOperation, applyOperations, rollbackMessage, importState } from '../src/core/index.js';
 import { parseAnalysis } from '../src/integration/analyzer.js';
 
 function setup() {
@@ -35,9 +35,10 @@ test('legacy scale config is expanded on import without losing existing values',
     createOperation('relationship.upsert', { from: 'a', to: 'b' }),
   ]);
   const imported = importState(state);
-  assert.equal(imported.config.scales.length, 13);
+  assert.equal(imported.config.scales.length, DEFAULT_SCALES.length);
   assert.equal(Object.values(imported.relationships)[0].scales.friendship, 0);
   assert.equal(Object.values(imported.relationships)[0].scales.love, 0);
+  assert.equal(Object.values(imported.relationships)[0].scales.family, 0, 'old chats get family love at 0');
 });
 
 test('confirmed scene characters are registered and referenced by scene name', () => {

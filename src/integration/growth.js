@@ -4,6 +4,7 @@ import { withBusy } from './busy.js';
 const DIRECTION_PRESETS = [
   { id: 'romance', label: 'Романтика', hint: 'gradually deepening romance: love and attraction grow through intimacy, vulnerability and shared moments' },
   { id: 'friendship', label: 'Дружба', hint: 'deepening platonic friendship: trust, respect and loyalty grow through support and honesty' },
+  { id: 'family', label: 'Семья', hint: 'a growing familial bond: protective care, belonging and family love (the family scale) through support, sacrifice and shared hardship; never romance' },
   { id: 'rivalry', label: 'Вражда и соперничество', hint: 'escalating antagonism: hostility and resentment grow through betrayal, competition and clashing values' },
   { id: 'obsession', label: 'Одержимость', hint: 'unhealthy fixation: dependency, jealousy and attraction grow through power imbalance and longing' },
   { id: 'fear', label: 'Страх и напряжение', hint: 'growing fear and tension: fear and distrust grow through threats, secrets and power over' },

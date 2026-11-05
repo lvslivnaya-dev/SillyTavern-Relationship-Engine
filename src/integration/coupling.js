@@ -16,6 +16,9 @@ export const COUPLING_RULES = Object.freeze([
   { from: 'love', to: 'affection', factor: 0.4, when: 'any' },
   { from: 'love', to: 'trust', factor: 0.2, when: 'up' },
   { from: 'love', to: 'attraction', factor: 0.25, when: 'any' },
+  // Family love warms and steadies, but never turns into romance or desire.
+  { from: 'family', to: 'affection', factor: 0.35, when: 'any' },
+  { from: 'family', to: 'trust', factor: 0.2, when: 'up' },
   // Pure lust must not create love quickly.
   { from: 'attraction', to: 'love', factor: 0.15, when: 'any' },
   { from: 'trust', to: 'friendship', factor: 0.15, when: 'up' },
